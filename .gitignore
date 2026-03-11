@@ -23,6 +23,10 @@ build/
 # Output files
 output/
 nul
+html/
+
+# Source code (contains sensitive info)
+mtools-source/
 
 # Temporary files
 *.tmp

@@ -2396,7 +2396,7 @@ class EChartsEditor:
                     source_end = int(source_end_entry.get()) - 1
                     target_start = int(target_start_entry.get()) - 1
                     target_end = int(target_end_entry.get()) - 1
-                replace_type = replace_type_var.get()  # 获取替换类型
+                    replace_type = replace_type_var.get()  # 获取替换类型
 
                     # 验证参数
                     if source_start < 0 or source_end < source_start:
@@ -2405,8 +2405,8 @@ class EChartsEditor:
                     if target_start < 0 or target_end < target_start:
                         messagebox.showerror("错误", "目标序号段无效！", parent=op_window)
                         return
-n              # 计算源段和目标段的长度
-            source_length = source_end - source_start + 1
+              # 计算源段和目标段的长度
+                    source_length = source_end - source_start + 1
                     target_length = target_end - target_start + 1
 
                     # 对所有文件的所有series进行数据替换
