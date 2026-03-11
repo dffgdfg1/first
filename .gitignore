@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude local settings
+.claude/settings.local.json
+
+# Output files
+output/
+nul
+
+# Temporary files
+*.tmp
+*.log

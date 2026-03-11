@@ -1,0 +1,14 @@
+{
+  "count": "6",
+  "range_start": "1",
+  "range_end": "11985",
+  "data_type": "current",
+  "fluctuation_type": "jump",
+  "fluctuation_mode": "independent",
+  "fluctuation_value": "5",
+  "jump_ratio": "30",
+  "max_limit": "",
+  "output_dir": "H:/dask/bbbb/72-77试验前P03 RT",
+  "sample_rate": "1",
+  "remember": true
+}

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECharts 图表</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+    <style>
+
+    body,
+    html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #chart-container {
+      width: 100%;
+      height: 100%;
+      min-height: 600px;
+    }
+  </style>
+</head>
+<body>
+    <div id="chart-container"></div>
+    <script>
+        // 初始化图表
+        const chart = echarts.init(document.getElementById('chart-container'));
+        
+        // 设置图表配置项
+        const option = {
+  "height": "1080px",
+  "legend": {
+    "data": [
+      "ADAS_Lane03-DVSts_Adc_BatAdc"
+    ]
+  },
+  "xAxis": {
+    "type": "time"
+  },
+  "yAxis": [
+    {
+      "type": "value",
+      "name": "数值"
+    }
+  ],
+  "series": [
+    {
+      "name": "ADAS_Lane03-DVSts_Adc_BatAdc",
+      "data": [
+        [
+          1766821805151.959,
+          14.03
+        ],
+        [
+          1766821805201.924,
+          14.01
+        ],
+        [
+          1766821805301.915,
+          14.02
+        ],
+        [
+          1766821805401.919,
+          14.04
+        ],
+        [
+          1766821805601.919,
+          14.07
+        ],
+        [
+          1766821805701.8818,
+          14.09
+        ],
+        [
+          1766821805801.9258,
+          14.11
+        ],
+        [
+          1766821805901.867,
+          14.07
+        ],
+        [
+          1766822405131.112,
+          8.88
+        ],
+        [
+          1766822405281.03,
+          8.9
+        ],
+        [
+          1766822405681.012,
+          8.88
+        ],
+        [
+          1766822405880.89,
+          8.89
+        ],
+        [
+          1766822405980.979,
+          8.91
+        ],
+        [
+          1766822406180.885,
+          8.95
+        ]
+      ],
+      "type": "line",
+      "smooth": false,
+      "yAxisIndex": 0,
+      "step": false
+    }
+  ],
+  "tooltip": {
+    "trigger": "axis",
+    "axisPointer": {
+      "type": "cross"
+    }
+  },
+  "dataZoom": [
+    {
+      "type": "slider",
+      "xAxisIndex": 0,
+      "show": true,
+      "filterMode": "filter"
+    }
+  ],
+  "toolbox": {
+    "show": true,
+    "feature": {
+      "dataZoom": {
+        "show": true
+      },
+      "restore": {},
+      "saveAsImage": {}
+    }
+  }
+};
+        
+        // 应用配置项
+        chart.setOption(option);
+        
+        // 响应窗口大小变化
+        window.addEventListener('resize', function() {
+            chart.resize();
+        });
+    </script>
+</body>
+</html>
