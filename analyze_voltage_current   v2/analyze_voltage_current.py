@@ -17,7 +17,8 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.webdriver import WebDriver as EdgeWebDriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -26,10 +27,24 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # ============ 配置参数 ============
-VOLTAGE_SEGMENTS = [6.5, 9, 14, 16, 18]
+# 项目配置
+PROJECT_CONFIGS = {
+    'D2J': {
+        'voltage_segments': [6.5, 9, 14, 16, 18],
+        'name': 'D2J项目',
+        'min_14v_current': 0.20  # D2J项目14V最小电流阈值（A）
+    },
+    'G2V': {
+        'voltage_segments': [9, 14, 16],
+        'name': 'G2V项目',
+        'min_14v_current': 0.01  # G2V项目14V最小电流阈值（A），允许更小的电流
+    }
+}
+
+VOLTAGE_SEGMENTS = [6.5, 9, 14, 16, 18]  # 默认D2J
 VOLTAGE_TOLERANCE = 1.0       # 电压匹配容差
 MIN_STABLE_POINTS = 30        # 最小稳定数据点数
-OUTLIER_STD_FACTOR = 2.5      # 异常值标准差倍数
+OUTLIER_STD_FACTOR = 3.5      # 异常值标准差倍数（更宽松，保留更多真实数据）
 STABLE_WINDOW = 50            # 稳定性检测滑动窗口
 STABLE_CV_THRESHOLD = 0.15    # 变异系数阈值（判断稳定）
 
@@ -116,13 +131,18 @@ class HTMLDataExtractor:
 class VoltageCurrentAnalyzer:
     """电压电流数据分析器"""
 
-    def __init__(self, html_file: str, outlier_factor: float = None):
+    def __init__(self, html_file: str, outlier_factor: float = None, project_type: str = 'D2J'):
         self.html_file = html_file
         self.voltage_points = []  # [(timestamp, voltage), ...]
         self.current_points = []  # [(timestamp, current), ...]
         self.current_unit = 'A'
         # 使用传入的异常值倍数，如果没有传入则使用全局默认值
         self.outlier_factor = outlier_factor if outlier_factor is not None else OUTLIER_STD_FACTOR
+        # 项目类型和对应的电压段
+        self.project_type = project_type
+        project_config = PROJECT_CONFIGS.get(project_type, PROJECT_CONFIGS['D2J'])
+        self.voltage_segments = project_config['voltage_segments']
+        self.min_14v_current = project_config.get('min_14v_current', 0.20)
 
     def analyze(self) -> Dict[float, Tuple[float, float]]:
         """执行分析，返回 {电压段: (最小电流, 最大电流)}"""
@@ -137,18 +157,27 @@ class VoltageCurrentAnalyzer:
             logger.warning(f"数据为空: {self.html_file}")
             return {}
 
-        self._voltages = np.array([v for _, v in self.voltage_points])
-        self._currents = np.array([v for _, v in self.current_points])
+        # 按时间戳对齐电压和电流数据
+        voltage_dict = {ts: v for ts, v in self.voltage_points}
+        aligned_data = []
 
-        # 检查数据长度是否一致
-        if len(self._voltages) != len(self._currents):
-            logger.warning(f"电压点数({len(self._voltages)})与电流点数({len(self._currents)})不一致，将只使用较短的长度")
-            min_len = min(len(self._voltages), len(self._currents))
-            self._voltages = self._voltages[:min_len]
-            self._currents = self._currents[:min_len]
+        for curr_ts, curr_val in self.current_points:
+            # 查找最接近的电压时间戳
+            if curr_ts in voltage_dict:
+                volt_val = voltage_dict[curr_ts]
+            else:
+                # 找到最近的电压时间戳
+                nearest_ts = min(voltage_dict.keys(), key=lambda ts: abs(ts - curr_ts))
+                volt_val = voltage_dict[nearest_ts]
+            aligned_data.append((volt_val, curr_val))
+
+        self._voltages = np.array([v for v, c in aligned_data])
+        self._currents = np.array([c for v, c in aligned_data])
+
+        logger.info(f"对齐后数据点数: {len(self._voltages)}")
 
         results = {}
-        for target_v in VOLTAGE_SEGMENTS:
+        for target_v in self.voltage_segments:
             result = self._analyze_voltage_segment(self._voltages, self._currents, target_v)
             if result:
                 results[target_v] = result
@@ -165,15 +194,23 @@ class VoltageCurrentAnalyzer:
             try:
                 self.voltage_points, self.current_points, self.current_unit = \
                     HTMLDataExtractor.extract(self.html_file)
-                self._voltages = np.array([v for _, v in self.voltage_points])
-                self._currents = np.array([v for _, v in self.current_points])
 
-                # 检查数据长度是否一致
-                if len(self._voltages) != len(self._currents):
-                    logger.warning(f"电压点数({len(self._voltages)})与电流点数({len(self._currents)})不一致，将只使用较短的长度")
-                    min_len = min(len(self._voltages), len(self._currents))
-                    self._voltages = self._voltages[:min_len]
-                    self._currents = self._currents[:min_len]
+                # 按时间戳对齐电压和电流数据
+                voltage_dict = {ts: v for ts, v in self.voltage_points}
+                aligned_data = []
+
+                for curr_ts, curr_val in self.current_points:
+                    # 查找最接近的电压时间戳
+                    if curr_ts in voltage_dict:
+                        volt_val = voltage_dict[curr_ts]
+                    else:
+                        # 找到最近的电压时间戳
+                        nearest_ts = min(voltage_dict.keys(), key=lambda ts: abs(ts - curr_ts))
+                        volt_val = voltage_dict[nearest_ts]
+                    aligned_data.append((volt_val, curr_val))
+
+                self._voltages = np.array([v for v, c in aligned_data])
+                self._currents = np.array([c for v, c in aligned_data])
             except Exception:
                 return None
 
@@ -198,19 +235,28 @@ class VoltageCurrentAnalyzer:
             try:
                 self.voltage_points, self.current_points, self.current_unit = \
                     HTMLDataExtractor.extract(self.html_file)
-                self._voltages = np.array([v for _, v in self.voltage_points])
-                self._currents = np.array([v for _, v in self.current_points])
+
+                # 按时间戳对齐电压和电流数据
+                voltage_dict = {ts: v for ts, v in self.voltage_points}
+                aligned_data = []
+
+                for curr_ts, curr_val in self.current_points:
+                    # 查找最接近的电压时间戳
+                    if curr_ts in voltage_dict:
+                        volt_val = voltage_dict[curr_ts]
+                    else:
+                        # 找到最近的电压时间戳
+                        nearest_ts = min(voltage_dict.keys(), key=lambda ts: abs(ts - curr_ts))
+                        volt_val = voltage_dict[nearest_ts]
+                    aligned_data.append((volt_val, curr_val))
+
+                self._voltages = np.array([v for v, c in aligned_data])
+                self._currents = np.array([c for v, c in aligned_data])
             except Exception:
                 return None
 
         voltages = self._voltages
         currents = self._currents
-
-        # 检查数据长度是否一致
-        max_valid_index = len(currents) - 1
-        if len(voltages) != len(currents):
-            logger.warning(f"电压点数({len(voltages)})与电流点数({len(currents)})不一致，将只使用前{len(currents)}个电压点")
-            voltages = voltages[:len(currents)]
 
         # 找到14V段
         mask = np.abs(voltages - 14) <= VOLTAGE_TOLERANCE
@@ -266,8 +312,8 @@ class VoltageCurrentAnalyzer:
                 low_mask = seg_c < 10000
                 seg_c = seg_c[low_mask]
             
-            # 去掉前后15%的过渡数据
-            trim = int(len(seg_c) * 0.15)
+            # 去掉前后5%的过渡数据（休眠电流使用更小的trim比例以保留更多真实数据）
+            trim = int(len(seg_c) * 0.05)
             if trim > 0 and len(seg_c) > trim * 2:
                 stable = seg_c[trim:-trim]
             else:
@@ -278,12 +324,9 @@ class VoltageCurrentAnalyzer:
             return None
 
         arr = np.array(all_stable)
-        # 去除异常值
-        filtered = self._remove_outliers(arr)
-        if len(filtered) == 0:
-            return None
-
-        result = (float(np.min(filtered)), float(np.max(filtered)), float(np.mean(filtered)))
+        # 休眠电流不使用IQR过滤，直接使用trim后的真实数据
+        # 因为我们需要的就是真实的最小值和最大值，不应该把低值当作异常值过滤掉
+        result = (float(np.min(arr)), float(np.max(arr)), float(np.mean(arr)))
         logger.info(f"  休眠14V: {result[0]:.6f}-{result[1]:.6f} (平均:{result[2]:.6f}) {self.current_unit}")
         return result
 
@@ -358,8 +401,9 @@ class VoltageCurrentAnalyzer:
                 if front_trim > 0:
                     seg_currents = seg_currents[front_trim:]
 
-            # 过滤掉极小值（<0.20A，过滤掉明显的低电流过渡阶段）
-            seg_currents = seg_currents[seg_currents >= 0.20]
+            # 过滤掉极小值（过滤掉明显的低电流过渡阶段）
+            # 使用项目特定的阈值：D2J为0.20A，G2V为0.01A
+            seg_currents = seg_currents[seg_currents >= self.min_14v_current]
 
             if len(seg_currents) == 0:
                 return None
@@ -500,12 +544,21 @@ class ChartScreenshot:
         options.add_argument('--window-size=2560,1440')  # 提高窗口分辨率到2K
         options.add_argument('--force-device-scale-factor=2')  # 2倍缩放提高清晰度
         options.add_argument('--high-dpi-support=1')  # 启用高DPI支持
+        options.add_argument('--disable-gpu')  # 禁用GPU加速，提高稳定性
+        options.add_argument('--disable-software-rasterizer')  # 禁用软件光栅化
         try:
-            self.driver = webdriver.Chrome(options=options)
+            # 直接使用 EdgeWebDriver 类而不是 webdriver.Edge()，避免 PyInstaller 打包问题
+            self.driver = EdgeWebDriver(options=options)
+            # 设置页面加载超时为600秒（10分钟）
+            self.driver.set_page_load_timeout(600)
+            # 设置脚本执行超时为600秒
+            self.driver.set_script_timeout(600)
+            # 设置Selenium命令执行超时为600秒（解决大文件加载超时问题）
+            self.driver.command_executor._timeout = 600
             logger.info("浏览器初始化成功")
         except Exception as e:
             logger.error(f"浏览器初始化失败: {e}")
-            logger.info("请确保已安装Chrome浏览器和对应版本的ChromeDriver")
+            logger.info("请确保已安装Edge浏览器和对应版本的EdgeDriver")
             raise
 
     def capture(self, html_file: str, output_path: str) -> bool:
@@ -525,14 +578,14 @@ class ChartScreenshot:
             file_url = Path(html_file).resolve().as_uri()
             self.driver.get(file_url)
 
-            # 等待ECharts渲染完成
-            time.sleep(2)
-            WebDriverWait(self.driver, 10).until(
+            # 等待ECharts渲染完成（增加超时时间以处理大文件）
+            time.sleep(5)
+            WebDriverWait(self.driver, 180).until(
                 lambda d: d.execute_script(
                     "return document.querySelector('canvas') !== null"
                 )
             )
-            time.sleep(1)
+            time.sleep(3)
 
             # 页面缩放到70%，确保能看到底部时间轴
             self.driver.execute_script("document.body.style.zoom='0.7'")
@@ -642,14 +695,17 @@ class ChartScreenshot:
             self.driver = None
 
 
-def generate_report(all_results: Dict, output_dir: Path):
+def generate_report(all_results: Dict, output_dir: Path, voltage_segments: List[float] = None):
     """生成Excel汇总报告"""
+    if voltage_segments is None:
+        voltage_segments = VOLTAGE_SEGMENTS
+
     def build_table(mode_key: str) -> pd.DataFrame:
         rows = []
         # 按样机编号组织数据（行）
         for num in range(1, 7):
             row = {'样机编号': f'{num}号样机'}
-            for voltage in VOLTAGE_SEGMENTS:
+            for voltage in voltage_segments:
                 if num in all_results and mode_key in all_results[num]:
                     data = all_results[num][mode_key]
                     if voltage in data:

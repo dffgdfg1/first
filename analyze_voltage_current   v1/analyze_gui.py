@@ -358,7 +358,7 @@ class AnalyzeGUI:
                 # 输出到统一output目录下的编号子文件夹
                 sub_output_dir = output_dir / str(folder_idx)
 
-            sub_output_dir.mkdir(exist_ok=True)
+            sub_output_dir.mkdir(parents=True, exist_ok=True)
 
             self._log(f"\n{'='*60}")
             self._log(f"处理文件夹 [{folder_idx}/{total_folders}]: {folder_name}")
@@ -379,9 +379,9 @@ class AnalyzeGUI:
         do_screenshot = self.var_screenshot.get()
 
         work_screenshot_dir = output_dir / "工作模式截图"
-        work_screenshot_dir.mkdir(exist_ok=True)
+        work_screenshot_dir.mkdir(parents=True, exist_ok=True)
         sleep_screenshot_dir = output_dir / "休眠电流截图"
-        sleep_screenshot_dir.mkdir(exist_ok=True)
+        sleep_screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         browser_ok = False
         if do_screenshot and folder_idx == 1:  # 只在第一个文件夹时初始化浏览器
@@ -494,9 +494,9 @@ class AnalyzeGUI:
         do_screenshot = self.var_screenshot.get()
 
         work_screenshot_dir = output_dir / "工作模式截图"
-        work_screenshot_dir.mkdir(exist_ok=True)
+        work_screenshot_dir.mkdir(parents=True, exist_ok=True)
         sleep_screenshot_dir = output_dir / "休眠电流截图"
-        sleep_screenshot_dir.mkdir(exist_ok=True)
+        sleep_screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         browser_ok = False
         if do_screenshot:
@@ -675,9 +675,9 @@ class AnalyzeGUI:
         do_screenshot = self.var_screenshot.get()
 
         work_screenshot_dir = output_dir / "工作模式截图"
-        work_screenshot_dir.mkdir(exist_ok=True)
+        work_screenshot_dir.mkdir(parents=True, exist_ok=True)
         sleep_screenshot_dir = output_dir / "休眠电流截图"
-        sleep_screenshot_dir.mkdir(exist_ok=True)
+        sleep_screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         browser_ok = False
         if do_screenshot and folder_idx == 1:

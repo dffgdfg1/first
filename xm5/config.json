@@ -1,0 +1,180 @@
+{
+  "id": "019ac061-3d94-7cfd-b845-133f2cfcb4f0",
+  "createdAt": 1764164189588,
+  "updatedAt": 1764669345914,
+  "name": "D2J P03",
+  "description": "D2J P03",
+  "content": {
+    "signals": [
+      {
+        "signal": "ADAS_Lane04/DVSts_VisionFrameID"
+      },
+      {
+        "signal": "ADAS_Lane04/DVSts_SocTemp"
+      },
+      {
+        "signal": "ADAS_Lane04/DVSts_SocStartUpTimes"
+      },
+      {
+        "signal": "ADAS_Lane04/DVSts_SocSensorTemp"
+      },
+      {
+        "signal": "ADAS_Lane04/DVSts_SocCpuLoad"
+      },
+      {
+        "signal": "ADAS_Lane05/DVSts_SocCameraStateReg"
+      },
+      {
+        "signal": "ADAS_Lane05/DVSts_PerceptFrameCounter"
+      },
+      {
+        "signal": "ADAS_Lane01/DVSts_McuCore1Load"
+      },
+      {
+        "signal": "ADAS_Lane01/DVSts_McuCore0Load"
+      },
+      {
+        "signal": "ADAS_Lane01/DVSts_PcbTemp"
+      },
+      {
+        "signal": "ADAS_Lane01/DVSts_McuTimeElapsed"
+      },
+      {
+        "signal": "ADAS_Lane01/DVSts_McuTemp"
+      },
+      {
+        "signal": "ADAS_Lane03/DVSts_Adc_BatAdc"
+      },
+      {
+        "signal": "ADAS_Lane06/DVSts_SocTimeElapsed"
+      },
+      {
+        "signal": "ADAS_Lane06/DVSts_SocEthLinkSts"
+      },
+      {
+        "signal": "ADAS_Lane02/DVSts_DnpTaskRollingCounter"
+      }
+    ],
+    "steps": [
+      {
+        "duration": 900,
+        "name": "D2J Operationmax / Parkingmax / Drivingmax",
+        "operations": [
+          {
+            "operation": "ign",
+            "val": false
+          },
+          {
+            "operation": "voltage",
+            "val": false
+          },
+          {
+            "operation": "current",
+            "val": false
+          },
+          {
+            "operation": "voltage_monitor",
+            "val": {
+              "enabled": true,
+              "min": 0,
+              "max": 0
+            }
+          },
+          {
+            "operation": "current_monitor",
+            "val": {
+              "enabled": true,
+              "min": 0,
+              "max": 0
+            }
+          },
+          {
+            "operation": "shell",
+            "val": "~/mdv/can/operationmax"
+          }
+        ]
+      },
+      {
+        "duration": 120,
+        "name": "D2J Operationmin / Parkingmin",
+        "operations": [
+          {
+            "operation": "shell",
+            "val": "~/mdv/can/operationmin"
+          },
+          {
+            "operation": "delay",
+            "val": 4
+          },
+          {
+            "operation": "ign",
+            "val": false
+          },
+          {
+            "operation": "voltage",
+            "val": false
+          },
+          {
+            "operation": "current",
+            "val": true
+          },
+          {
+            "operation": "voltage_monitor",
+            "val": {
+              "enabled": true,
+              "min": 0,
+              "max": 0
+            }
+          },
+          {
+            "operation": "current_monitor",
+            "val": {
+              "enabled": true,
+              "min": 0,
+              "max": 0
+            }
+          }
+        ]
+      }
+    ],
+    "init": [
+      {
+        "operation": "ign",
+        "val": false
+      },
+      {
+        "operation": "voltage",
+        "val": false
+      },
+      {
+        "operation": "current",
+        "val": false
+      },
+      {
+        "operation": "voltage_monitor",
+        "val": {
+          "enabled": true,
+          "min": 0,
+          "max": 0
+        }
+      },
+      {
+        "operation": "current_monitor",
+        "val": {
+          "enabled": true,
+          "min": 0,
+          "max": 0
+        }
+      },
+      {
+        "operation": "shell",
+        "val": "~/mdv/can/operationmax"
+      }
+    ],
+    "loopCount": 1
+  },
+  "version": "v2",
+  "dbc": "D2J_VCAN_LabVer",
+  "nameVersion": "D2J P03_v2",
+  "_X_ROW_KEY": "row_97"
+}

@@ -1,14 +1,14 @@
 {
   "count": "6",
   "range_start": "1",
-  "range_end": "11985",
+  "range_end": "606",
   "data_type": "current",
   "fluctuation_type": "jump",
   "fluctuation_mode": "independent",
   "fluctuation_value": "5",
-  "jump_ratio": "30",
+  "jump_ratio": "20",
   "max_limit": "",
-  "output_dir": "H:/dask/bbbb/72-77试验前P03 RT",
+  "output_dir": "H:/dask/新建文件夹 (6)/L02 25%",
   "sample_rate": "1",
   "remember": true
 }
