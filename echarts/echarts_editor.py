@@ -5092,11 +5092,30 @@ class EChartsEditor:
                                                 if window_voltage is not None and abs(window_voltage - current_voltage) < voltage_threshold:
                                                     window_values.append(current_data[k][1])
 
+                                    # 检查是否应该进行平滑
+                                    should_smooth = False
+                                    if len(window_values) >= 2:
+                                        max_val = max(window_values)
+                                        min_val = min(window_values)
+
+                                        # 如果窗口内电流变化剧烈（最大值和最小值差异超过平均值的50%），不平滑
+                                        # 这样可以保护开关机点的突变特征
+                                        avg_val = sum(window_values) / len(window_values)
+                                        if avg_val > 0:
+                                            variation_ratio = (max_val - min_val) / avg_val
+                                            # 如果变化幅度小于50%，认为是稳定区域，可以平滑
+                                            if variation_ratio < 0.5:
+                                                should_smooth = True
+                                        else:
+                                            # 平均值为0或接近0，不平滑
+                                            should_smooth = False
+
                                     # 计算平均值
-                                    if window_values:
+                                    if should_smooth:
                                         avg_value = sum(window_values) / len(window_values)
                                         smoothed_data.append([timestamp, avg_value])
                                     else:
+                                        # 不平滑，保持原值
                                         smoothed_data.append([timestamp, value])
                                 else:
                                     smoothed_data.append(current_data[j])
