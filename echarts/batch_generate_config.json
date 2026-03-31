@@ -8,13 +8,13 @@
   "fluctuation_value": "0",
   "jump_ratio": "100",
   "max_limit": "98",
-  "output_dir": "H:/dask/aaaa",
+  "output_dir": "D:/D2J PV/25-26#试验前p03/RT/D2J P03/20260327143555/html",
   "sample_rate": "1",
   "peak_clip_enabled": false,
   "peak_threshold": "98",
-  "zero_handling": "as_data",
-  "power_cycle_count": true,
+  "zero_handling": "to_null",
+  "power_cycle_count": false,
   "smooth_enabled": true,
-  "smooth_window": "3",
+  "smooth_window": "1000",
   "remember": true
 }

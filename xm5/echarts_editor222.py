@@ -485,9 +485,12 @@ class EChartsEditor:
         tree.bind('<Button-3>', lambda e: self.copy_selection(e, tree))
         # 绑定Ctrl+C复制
         tree.bind('<Control-c>', lambda e: self.copy_selection(e, tree))
+        # 绑定Ctrl+V粘贴日期
+        tree.bind('<Control-v>', lambda e: self.paste_date(e, tree, series_idx))
 
         # 添加说明标签
-        info_label = ttk.Label(container, text="提示：双击数值列可以编辑数据，右键或Ctrl+C可复制选中数据",
+        info_label = ttk.Label(container,
+                              text="提示：双击日期/数值列可编辑，右键或Ctrl+C复制，Ctrl+V粘贴日期到选中行",
                               foreground='blue')
         info_label.grid(row=2, column=0, columnspan=2, pady=5)
 
@@ -514,29 +517,138 @@ class EChartsEditor:
         except Exception as e:
             print(f"复制失败: {str(e)}")
 
+    def paste_date(self, event=None, tree=None, series_idx=0):
+        """粘贴日期到选中的行，同步更新时间戳"""
+        try:
+            selection = tree.selection()
+            if not selection:
+                self.status_var.set("请先选择要粘贴日期的行")
+                return
+
+            # 获取剪贴板内容
+            try:
+                clipboard_text = self.root.clipboard_get().strip()
+            except tk.TclError:
+                self.status_var.set("剪贴板为空")
+                return
+
+            if not clipboard_text:
+                self.status_var.set("剪贴板为空")
+                return
+
+            # 解析剪贴板中的日期（支持多行粘贴）
+            clipboard_lines = clipboard_text.split('\n')
+            dates_to_paste = []
+
+            for line in clipboard_lines:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # 如果是制表符分隔的数据行（从表格复制的），尝试提取日期列
+                parts = line.split('\t')
+                date_str = None
+
+                if len(parts) >= 3:
+                    # 可能是完整的表格行，日期在第3列（索引2）
+                    date_str = parts[2].strip()
+                elif len(parts) == 1:
+                    # 单独的日期字符串
+                    date_str = parts[0].strip()
+
+                if date_str:
+                    # 尝试解析日期
+                    dt = self._parse_date_string(date_str)
+                    if dt:
+                        dates_to_paste.append(dt)
+
+            if not dates_to_paste:
+                self.status_var.set("剪贴板中未找到有效的日期数据")
+                return
+
+            # 将日期粘贴到选中的行
+            updated_count = 0
+            selection_list = list(selection)
+
+            for i, item in enumerate(selection_list):
+                # 如果日期数量不够，循环使用最后一个日期
+                date_idx = min(i, len(dates_to_paste) - 1)
+                dt = dates_to_paste[date_idx]
+
+                values = tree.item(item, 'values')
+                row_idx = int(values[0]) - 1
+
+                # 转换为毫秒时间戳
+                new_timestamp = int(dt.timestamp() * 1000)
+                new_datetime_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                # 更新series_data中的时间戳
+                self.series_data[series_idx]['data'][row_idx][0] = new_timestamp
+
+                # 更新表格显示
+                new_values = list(values)
+                new_values[1] = new_timestamp
+                new_values[2] = new_datetime_str
+                tree.item(item, values=new_values)
+                updated_count += 1
+
+            self.status_var.set(f"已粘贴日期到 {updated_count} 行")
+
+        except Exception as e:
+            self.status_var.set(f"粘贴日期失败: {str(e)}")
+            print(f"粘贴日期失败: {str(e)}")
+
+    def _parse_date_string(self, date_str):
+        """解析日期字符串，支持多种格式，返回datetime对象或None"""
+        formats = (
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%d %H:%M',
+            '%Y-%m-%d',
+            '%Y/%m/%d %H:%M:%S',
+            '%Y/%m/%d %H:%M',
+            '%Y/%m/%d',
+        )
+        for fmt in formats:
+            try:
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
+                continue
+        return None
+
     def edit_cell(self, event, tree, series_idx):
-        """编辑单元格"""
+        """编辑单元格（支持编辑日期和数值）"""
         # 获取选中的行和列
-        item = tree.selection()[0]
+        selection = tree.selection()
+        if not selection:
+            return
+        item = selection[0]
         column = tree.identify_column(event.x)
 
-        # 只允许编辑数值列
-        if column != '#4':  # 第4列是数值列
+        # 允许编辑日期列(#3)和数值列(#4)
+        if column not in ('#3', '#4'):
             return
 
         # 获取当前值
         values = tree.item(item, 'values')
-        current_value = values[3]
         row_idx = int(values[0]) - 1
 
-        # 创建编辑窗口
+        if column == '#4':
+            # 编辑数值
+            self._edit_value_cell(tree, item, values, row_idx, series_idx)
+        elif column == '#3':
+            # 编辑日期
+            self._edit_date_cell(tree, item, values, row_idx, series_idx)
+
+    def _edit_value_cell(self, tree, item, values, row_idx, series_idx):
+        """编辑数值单元格"""
+        current_value = values[3]
+
         edit_window = tk.Toplevel(self.root)
         edit_window.title("编辑数值")
         edit_window.geometry("300x120")
         edit_window.transient(self.root)
         edit_window.grab_set()
 
-        # 居中显示
         edit_window.update_idletasks()
         x = (edit_window.winfo_screenwidth() // 2) - (edit_window.winfo_width() // 2)
         y = (edit_window.winfo_screenheight() // 2) - (edit_window.winfo_height() // 2)
@@ -553,9 +665,7 @@ class EChartsEditor:
         def save_edit():
             try:
                 new_value = float(entry.get())
-                # 更新series_data中的数据
                 self.series_data[series_idx]['data'][row_idx][1] = new_value
-                # 更新表格显示
                 new_values = list(values)
                 new_values[3] = new_value
                 tree.item(item, values=new_values)
@@ -567,14 +677,85 @@ class EChartsEditor:
         def cancel_edit():
             edit_window.destroy()
 
-        # 按钮框架
         btn_frame = ttk.Frame(edit_window)
         btn_frame.pack(pady=10)
-
         ttk.Button(btn_frame, text="保存", command=save_edit).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="取消", command=cancel_edit).pack(side=tk.LEFT, padx=5)
 
-        # 绑定回车键保存
+        entry.bind('<Return>', lambda e: save_edit())
+        entry.bind('<Escape>', lambda e: cancel_edit())
+
+    def _edit_date_cell(self, tree, item, values, row_idx, series_idx):
+        """编辑日期单元格，修改日期后同步更新时间戳"""
+        current_datetime = values[2]
+
+        edit_window = tk.Toplevel(self.root)
+        edit_window.title("编辑日期时间")
+        edit_window.geometry("380x180")
+        edit_window.transient(self.root)
+        edit_window.grab_set()
+
+        edit_window.update_idletasks()
+        x = (edit_window.winfo_screenwidth() // 2) - (edit_window.winfo_width() // 2)
+        y = (edit_window.winfo_screenheight() // 2) - (edit_window.winfo_height() // 2)
+        edit_window.geometry(f"+{x}+{y}")
+
+        ttk.Label(edit_window, text="请输入新的日期时间：").pack(pady=(10, 2))
+        ttk.Label(edit_window, text="支持格式: YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DD",
+                  foreground='gray').pack(pady=(0, 5))
+
+        entry = ttk.Entry(edit_window, width=35)
+        entry.insert(0, str(current_datetime))
+        entry.pack(pady=5)
+        entry.focus()
+        entry.select_range(0, tk.END)
+
+        def save_edit():
+            date_str = entry.get().strip()
+            try:
+                # 支持多种日期格式
+                dt = None
+                for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d',
+                            '%Y/%m/%d %H:%M:%S', '%Y/%m/%d %H:%M', '%Y/%m/%d'):
+                    try:
+                        dt = datetime.strptime(date_str, fmt)
+                        break
+                    except ValueError:
+                        continue
+
+                if dt is None:
+                    messagebox.showerror("错误",
+                        "无法识别的日期格式！\n请使用: YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DD",
+                        parent=edit_window)
+                    return
+
+                # 转换为毫秒时间戳
+                new_timestamp = int(dt.timestamp() * 1000)
+                new_datetime_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                # 更新series_data中的时间戳
+                self.series_data[series_idx]['data'][row_idx][0] = new_timestamp
+
+                # 更新表格显示（时间戳和日期时间都更新）
+                new_values = list(values)
+                new_values[1] = new_timestamp
+                new_values[2] = new_datetime_str
+                tree.item(item, values=new_values)
+
+                edit_window.destroy()
+                self.status_var.set(
+                    f"已更新日期：序列{series_idx + 1}，第{row_idx + 1}行 → {new_datetime_str} (时间戳: {new_timestamp})")
+            except Exception as e:
+                messagebox.showerror("错误", f"更新日期失败：{str(e)}", parent=edit_window)
+
+        def cancel_edit():
+            edit_window.destroy()
+
+        btn_frame = ttk.Frame(edit_window)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="保存", command=save_edit).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=cancel_edit).pack(side=tk.LEFT, padx=5)
+
         entry.bind('<Return>', lambda e: save_edit())
         entry.bind('<Escape>', lambda e: cancel_edit())
 

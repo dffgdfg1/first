@@ -502,9 +502,12 @@ class EChartsEditor:
         tree.bind('<Button-3>', lambda e: self.copy_selection(e, tree))
         # 绑定Ctrl+C复制
         tree.bind('<Control-c>', lambda e: self.copy_selection(e, tree))
+        # 绑定Ctrl+V粘贴日期
+        tree.bind('<Control-v>', lambda e: self.paste_date(e, tree, series_idx))
 
         # 添加说明标签
-        info_label = ttk.Label(container, text="提示：双击数值列可以编辑数据，右键或Ctrl+C可复制选中数据",
+        info_label = ttk.Label(container,
+                              text="提示：双击日期/数值列可编辑，右键或Ctrl+C复制，Ctrl+V粘贴日期到选中行",
                               foreground='blue')
         info_label.grid(row=2, column=0, columnspan=2, pady=5)
 
@@ -567,7 +570,7 @@ class EChartsEditor:
             messagebox.showinfo("搜索结果", f"未找到数值范围 {search_value-tolerance} ~ {search_value+tolerance} 内的数据")
 
     def fill_missing_data(self):
-        """填充缺失的时间序列数据"""
+        """填充缺失的时间序列数据（每段缺失可独立选择填充方式）"""
         if not self.series_data:
             messagebox.showwarning("警告", "请先加载HTML文件！")
             return
@@ -611,10 +614,21 @@ class EChartsEditor:
             messagebox.showinfo("提示", "未检测到缺失数据")
             return
 
+        # 填充方法选项
+        method_options = {
+            "linear": "线性插值（推荐）",
+            "forward": "前向填充",
+            "backward": "后向填充",
+            "average": "平均值填充",
+            "zero": "零值填充"
+        }
+        method_keys = list(method_options.keys())
+        method_labels = list(method_options.values())
+
         # 显示缺失数据信息和填充选项
         fill_dialog = tk.Toplevel(self.root)
         fill_dialog.title("填充缺失数据")
-        fill_dialog.geometry("700x680")
+        fill_dialog.geometry("750x700")
         fill_dialog.transient(self.root)
         fill_dialog.grab_set()
 
@@ -624,57 +638,102 @@ class EChartsEditor:
         y = (fill_dialog.winfo_screenheight() // 2) - (fill_dialog.winfo_height() // 2)
         fill_dialog.geometry(f"+{x}+{y}")
 
-        # 显示缺失数据信息
-        info_frame = ttk.LabelFrame(fill_dialog, text="检测到的缺失数据段", padding=10)
-        info_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+        # 统计信息
+        total_missing = sum(g['missing_count'] for g in gaps)
+        summary_label = ttk.Label(fill_dialog,
+                                  text=f"检测到 {len(gaps)} 个缺失段，共约 {total_missing} 个数据点    "
+                                       f"正常时间间隔: {median_diff} ms")
+        summary_label.pack(padx=10, pady=(10, 5), anchor=tk.W)
 
-        # 添加滚动条
-        info_scroll = ttk.Scrollbar(info_frame)
-        info_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        # 全局设置栏：一键设置所有段的填充方式
+        global_frame = ttk.Frame(fill_dialog)
+        global_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
 
-        info_text = tk.Text(info_frame, height=8, width=75, yscrollcommand=info_scroll.set)
-        info_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        info_scroll.config(command=info_text.yview)
+        ttk.Label(global_frame, text="统一设置所有段:").pack(side=tk.LEFT)
+        global_combo = ttk.Combobox(global_frame, values=method_labels, state='readonly', width=18)
+        global_combo.set(method_labels[0])
+        global_combo.pack(side=tk.LEFT, padx=5)
 
-        total_missing = 0
-        for i, gap in enumerate(gaps, 1):
-            info_text.insert(tk.END, f"缺失段 {i}:\n")
-            info_text.insert(tk.END, f"  位置: 第 {gap['index']+1} 行之后\n")
-            info_text.insert(tk.END, f"  时间跨度: {gap['start_time']} -> {gap['end_time']}\n")
-            info_text.insert(tk.END, f"  数值范围: {gap['start_value']} -> {gap['end_value']}\n")
-            info_text.insert(tk.END, f"  预计缺失: {gap['missing_count']} 个数据点\n\n")
-            total_missing += gap['missing_count']
+        # 可滚动的缺失段列表区域
+        list_outer = ttk.LabelFrame(fill_dialog, text="各缺失段详情与填充方式", padding=5)
+        list_outer.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 5))
 
-        info_text.insert(tk.END, f"总计缺失约 {total_missing} 个数据点\n")
-        info_text.insert(tk.END, f"正常时间间隔: {median_diff} ms\n")
-        info_text.config(state=tk.DISABLED)
+        # Canvas + Scrollbar 实现滚动
+        canvas = tk.Canvas(list_outer)
+        scrollbar = ttk.Scrollbar(list_outer, orient="vertical", command=canvas.yview)
+        scroll_frame = ttk.Frame(canvas)
 
-        # 填充方法选择
-        method_frame = ttk.LabelFrame(fill_dialog, text="选择填充方法", padding=10)
-        method_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
 
-        method_var = tk.StringVar(value="linear")
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
-        methods = [
-            ("linear", "线性插值（推荐）- 在起止值之间线性过渡"),
-            ("forward", "前向填充 - 使用缺失前的最后一个值"),
-            ("backward", "后向填充 - 使用缺失后的第一个值"),
-            ("average", "平均值填充 - 使用前后值的平均值"),
-            ("zero", "零值填充 - 填充为0（适用于电流断开场景）")
-        ]
+        # 鼠标滚轮绑定
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
-        for value, text in methods:
-            ttk.Radiobutton(method_frame, text=text, variable=method_var, value=value).pack(anchor=tk.W, pady=2)
+        # 为每个缺失段创建独立的信息行和填充方式选择
+        gap_method_vars = []  # 存储每段的填充方式变量
+
+        for i, gap in enumerate(gaps):
+            gap_frame = ttk.LabelFrame(scroll_frame, text=f"缺失段 {i + 1}", padding=8)
+            gap_frame.pack(fill=tk.X, padx=5, pady=3)
+
+            # 信息行
+            info_row = ttk.Frame(gap_frame)
+            info_row.pack(fill=tk.X)
+
+            # 转换时间戳为可读日期
+            try:
+                start_dt = datetime.fromtimestamp(gap['start_time'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                start_dt = str(gap['start_time'])
+            try:
+                end_dt = datetime.fromtimestamp(gap['end_time'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+            except Exception:
+                end_dt = str(gap['end_time'])
+
+            ttk.Label(info_row,
+                      text=f"位置: 第 {gap['index']+1} 行后  |  "
+                           f"时间: {start_dt} → {end_dt}  |  "
+                           f"数值: {gap['start_value']} → {gap['end_value']}  |  "
+                           f"缺失: {gap['missing_count']} 点"
+                      ).pack(side=tk.LEFT)
+
+            # 填充方式下拉框
+            method_row = ttk.Frame(gap_frame)
+            method_row.pack(fill=tk.X, pady=(4, 0))
+
+            ttk.Label(method_row, text="填充方式:").pack(side=tk.LEFT)
+            combo = ttk.Combobox(method_row, values=method_labels, state='readonly', width=18)
+            combo.set(method_labels[0])  # 默认线性插值
+            combo.pack(side=tk.LEFT, padx=5)
+            gap_method_vars.append(combo)
+
+        # "统一设置"按钮应用全局选择到所有段
+        def apply_global_method():
+            selected = global_combo.get()
+            for combo in gap_method_vars:
+                combo.set(selected)
+
+        ttk.Button(global_frame, text="应用", command=apply_global_method).pack(side=tk.LEFT, padx=5)
 
         def apply_fill():
-            method = method_var.get()
             filled_count = 0
 
             # 从后往前填充，避免索引变化问题
-            for gap in reversed(gaps):
+            for gap_idx, gap in enumerate(reversed(gaps)):
+                # 获取该段对应的填充方式（注意reversed顺序）
+                combo = gap_method_vars[len(gaps) - 1 - gap_idx]
+                selected_label = combo.get()
+                # 将显示标签转回方法key
+                method = method_keys[method_labels.index(selected_label)]
+
                 idx = gap['index']
                 start_time = gap['start_time']
-                end_time = gap['end_time']
                 start_value = gap['start_value']
                 end_value = gap['end_value']
                 missing_count = gap['missing_count']
@@ -687,7 +746,6 @@ class EChartsEditor:
 
                     # 根据方法计算数值
                     if method == "linear":
-                        # 线性插值
                         ratio = i / (missing_count + 1)
                         new_value = start_value + (end_value - start_value) * ratio
                     elif method == "forward":
@@ -698,6 +756,8 @@ class EChartsEditor:
                         new_value = (start_value + end_value) / 2
                     elif method == "zero":
                         new_value = 0
+                    else:
+                        new_value = 0
 
                     filled_data.append([new_time, new_value])
 
@@ -706,18 +766,25 @@ class EChartsEditor:
                     data.insert(idx + 1 + i, point)
                     filled_count += 1
 
+            # 解绑鼠标滚轮，避免dialog关闭后报错
+            canvas.unbind_all("<MouseWheel>")
+
             # 更新显示
             self.display_data()
             fill_dialog.destroy()
             self.status_var.set(f"已填充 {filled_count} 个数据点")
             messagebox.showinfo("完成", f"成功填充 {filled_count} 个数据点！")
 
+        def cancel_fill():
+            canvas.unbind_all("<MouseWheel>")
+            fill_dialog.destroy()
+
         # 按钮
         btn_frame = ttk.Frame(fill_dialog)
         btn_frame.pack(pady=10)
 
         ttk.Button(btn_frame, text="应用填充", command=apply_fill).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="取消", command=fill_dialog.destroy).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=cancel_fill).pack(side=tk.LEFT, padx=5)
 
     def copy_selection(self, event=None, tree=None):
         """复制选中的数据到剪贴板"""
@@ -742,29 +809,138 @@ class EChartsEditor:
         except Exception as e:
             print(f"复制失败: {str(e)}")
 
+    def paste_date(self, event=None, tree=None, series_idx=0):
+        """粘贴日期到选中的行，同步更新时间戳"""
+        try:
+            selection = tree.selection()
+            if not selection:
+                self.status_var.set("请先选择要粘贴日期的行")
+                return
+
+            # 获取剪贴板内容
+            try:
+                clipboard_text = self.root.clipboard_get().strip()
+            except tk.TclError:
+                self.status_var.set("剪贴板为空")
+                return
+
+            if not clipboard_text:
+                self.status_var.set("剪贴板为空")
+                return
+
+            # 解析剪贴板中的日期（支持多行粘贴）
+            clipboard_lines = clipboard_text.split('\n')
+            dates_to_paste = []
+
+            for line in clipboard_lines:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # 如果是制表符分隔的数据行（从表格复制的），尝试提取日期列
+                parts = line.split('\t')
+                date_str = None
+
+                if len(parts) >= 3:
+                    # 可能是完整的表格行，日期在第3列（索引2）
+                    date_str = parts[2].strip()
+                elif len(parts) == 1:
+                    # 单独的日期字符串
+                    date_str = parts[0].strip()
+
+                if date_str:
+                    # 尝试解析日期
+                    dt = self._parse_date_string(date_str)
+                    if dt:
+                        dates_to_paste.append(dt)
+
+            if not dates_to_paste:
+                self.status_var.set("剪贴板中未找到有效的日期数据")
+                return
+
+            # 将日期粘贴到选中的行
+            updated_count = 0
+            selection_list = list(selection)
+
+            for i, item in enumerate(selection_list):
+                # 如果日期数量不够，循环使用最后一个日期
+                date_idx = min(i, len(dates_to_paste) - 1)
+                dt = dates_to_paste[date_idx]
+
+                values = tree.item(item, 'values')
+                row_idx = int(values[0]) - 1
+
+                # 转换为毫秒时间戳
+                new_timestamp = int(dt.timestamp() * 1000)
+                new_datetime_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                # 更新series_data中的时间戳
+                self.series_data[series_idx]['data'][row_idx][0] = new_timestamp
+
+                # 更新表格显示
+                new_values = list(values)
+                new_values[1] = new_timestamp
+                new_values[2] = new_datetime_str
+                tree.item(item, values=new_values)
+                updated_count += 1
+
+            self.status_var.set(f"已粘贴日期到 {updated_count} 行")
+
+        except Exception as e:
+            self.status_var.set(f"粘贴日期失败: {str(e)}")
+            print(f"粘贴日期失败: {str(e)}")
+
+    def _parse_date_string(self, date_str):
+        """解析日期字符串，支持多种格式，返回datetime对象或None"""
+        formats = (
+            '%Y-%m-%d %H:%M:%S',
+            '%Y-%m-%d %H:%M',
+            '%Y-%m-%d',
+            '%Y/%m/%d %H:%M:%S',
+            '%Y/%m/%d %H:%M',
+            '%Y/%m/%d',
+        )
+        for fmt in formats:
+            try:
+                return datetime.strptime(date_str, fmt)
+            except ValueError:
+                continue
+        return None
+
     def edit_cell(self, event, tree, series_idx):
-        """编辑单元格"""
+        """编辑单元格（支持编辑日期和数值）"""
         # 获取选中的行和列
-        item = tree.selection()[0]
+        selection = tree.selection()
+        if not selection:
+            return
+        item = selection[0]
         column = tree.identify_column(event.x)
 
-        # 只允许编辑数值列
-        if column != '#4':  # 第4列是数值列
+        # 允许编辑日期列(#3)和数值列(#4)
+        if column not in ('#3', '#4'):
             return
 
         # 获取当前值
         values = tree.item(item, 'values')
-        current_value = values[3]
         row_idx = int(values[0]) - 1
 
-        # 创建编辑窗口
+        if column == '#4':
+            # 编辑数值
+            self._edit_value_cell(tree, item, values, row_idx, series_idx)
+        elif column == '#3':
+            # 编辑日期
+            self._edit_date_cell(tree, item, values, row_idx, series_idx)
+
+    def _edit_value_cell(self, tree, item, values, row_idx, series_idx):
+        """编辑数值单元格"""
+        current_value = values[3]
+
         edit_window = tk.Toplevel(self.root)
         edit_window.title("编辑数值")
         edit_window.geometry("300x120")
         edit_window.transient(self.root)
         edit_window.grab_set()
 
-        # 居中显示
         edit_window.update_idletasks()
         x = (edit_window.winfo_screenwidth() // 2) - (edit_window.winfo_width() // 2)
         y = (edit_window.winfo_screenheight() // 2) - (edit_window.winfo_height() // 2)
@@ -781,9 +957,7 @@ class EChartsEditor:
         def save_edit():
             try:
                 new_value = float(entry.get())
-                # 更新series_data中的数据
                 self.series_data[series_idx]['data'][row_idx][1] = new_value
-                # 更新表格显示
                 new_values = list(values)
                 new_values[3] = new_value
                 tree.item(item, values=new_values)
@@ -795,14 +969,78 @@ class EChartsEditor:
         def cancel_edit():
             edit_window.destroy()
 
-        # 按钮框架
         btn_frame = ttk.Frame(edit_window)
         btn_frame.pack(pady=10)
-
         ttk.Button(btn_frame, text="保存", command=save_edit).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="取消", command=cancel_edit).pack(side=tk.LEFT, padx=5)
 
-        # 绑定回车键保存
+        entry.bind('<Return>', lambda e: save_edit())
+        entry.bind('<Escape>', lambda e: cancel_edit())
+
+    def _edit_date_cell(self, tree, item, values, row_idx, series_idx):
+        """编辑日期单元格，修改日期后同步更新时间戳"""
+        current_datetime = values[2]
+
+        edit_window = tk.Toplevel(self.root)
+        edit_window.title("编辑日期时间")
+        edit_window.geometry("380x180")
+        edit_window.transient(self.root)
+        edit_window.grab_set()
+
+        edit_window.update_idletasks()
+        x = (edit_window.winfo_screenwidth() // 2) - (edit_window.winfo_width() // 2)
+        y = (edit_window.winfo_screenheight() // 2) - (edit_window.winfo_height() // 2)
+        edit_window.geometry(f"+{x}+{y}")
+
+        ttk.Label(edit_window, text="请输入新的日期时间：").pack(pady=(10, 2))
+        ttk.Label(edit_window, text="支持格式: YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DD",
+                  foreground='gray').pack(pady=(0, 5))
+
+        entry = ttk.Entry(edit_window, width=35)
+        entry.insert(0, str(current_datetime))
+        entry.pack(pady=5)
+        entry.focus()
+        entry.select_range(0, tk.END)
+
+        def save_edit():
+            date_str = entry.get().strip()
+            try:
+                # 支持多种日期格式
+                dt = self._parse_date_string(date_str)
+
+                if dt is None:
+                    messagebox.showerror("错误",
+                        "无法识别的日期格式！\n请使用: YYYY-MM-DD HH:MM:SS 或 YYYY-MM-DD",
+                        parent=edit_window)
+                    return
+
+                # 转换为毫秒时间戳
+                new_timestamp = int(dt.timestamp() * 1000)
+                new_datetime_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                # 更新series_data中的时间戳
+                self.series_data[series_idx]['data'][row_idx][0] = new_timestamp
+
+                # 更新表格显示（时间戳和日期时间都更新）
+                new_values = list(values)
+                new_values[1] = new_timestamp
+                new_values[2] = new_datetime_str
+                tree.item(item, values=new_values)
+
+                edit_window.destroy()
+                self.status_var.set(
+                    f"已更新日期：序列{series_idx + 1}，第{row_idx + 1}行 → {new_datetime_str} (时间戳: {new_timestamp})")
+            except Exception as e:
+                messagebox.showerror("错误", f"更新日期失败：{str(e)}", parent=edit_window)
+
+        def cancel_edit():
+            edit_window.destroy()
+
+        btn_frame = ttk.Frame(edit_window)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="保存", command=save_edit).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=cancel_edit).pack(side=tk.LEFT, padx=5)
+
         entry.bind('<Return>', lambda e: save_edit())
         entry.bind('<Escape>', lambda e: cancel_edit())
 
@@ -1827,12 +2065,24 @@ class EChartsEditor:
         peak_clipping_max_entry.grid(row=2, column=1, padx=2)
         peak_clipping_max_entry.insert(0, "5.0")
         ttk.Label(peak_clipping_params_frame, text="（高于此值将被削峰）").grid(row=2, column=2, sticky=tk.W, pady=2, columnspan=2)
+        peak_clipping_extreme_max_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(peak_clipping_params_frame, text="极大值不处理 ≥",
+                        variable=peak_clipping_extreme_max_var).grid(row=2, column=4, padx=2)
+        peak_clipping_extreme_max_entry = ttk.Entry(peak_clipping_params_frame, width=8)
+        peak_clipping_extreme_max_entry.grid(row=2, column=5, padx=2)
+        peak_clipping_extreme_max_entry.insert(0, "10.0")
 
         ttk.Label(peak_clipping_params_frame, text="最小阈值:").grid(row=3, column=0, sticky=tk.W, pady=2)
         peak_clipping_min_entry = ttk.Entry(peak_clipping_params_frame, width=10)
         peak_clipping_min_entry.grid(row=3, column=1, padx=2)
         peak_clipping_min_entry.insert(0, "2.0")
         ttk.Label(peak_clipping_params_frame, text="（低于此值将被削峰）").grid(row=3, column=2, sticky=tk.W, pady=2, columnspan=2)
+        peak_clipping_extreme_min_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(peak_clipping_params_frame, text="极小值不处理 ≤",
+                        variable=peak_clipping_extreme_min_var).grid(row=3, column=4, padx=2)
+        peak_clipping_extreme_min_entry = ttk.Entry(peak_clipping_params_frame, width=8)
+        peak_clipping_extreme_min_entry.grid(row=3, column=5, padx=2)
+        peak_clipping_extreme_min_entry.insert(0, "0.0")
 
         # 削峰方式选择
         ttk.Label(peak_clipping_params_frame, text="削峰方式:").grid(row=4, column=0, sticky=tk.W, pady=2)
@@ -2627,6 +2877,12 @@ class EChartsEditor:
             peak_clipping_max_entry.insert(0, restore_params.get('peak_clipping_max', '5.0'))
             peak_clipping_min_entry.delete(0, tk.END)
             peak_clipping_min_entry.insert(0, restore_params.get('peak_clipping_min', '0.0'))
+            peak_clipping_extreme_max_var.set(restore_params.get('peak_clipping_extreme_max_enabled', False))
+            peak_clipping_extreme_max_entry.delete(0, tk.END)
+            peak_clipping_extreme_max_entry.insert(0, restore_params.get('peak_clipping_extreme_max', '10.0'))
+            peak_clipping_extreme_min_var.set(restore_params.get('peak_clipping_extreme_min_enabled', False))
+            peak_clipping_extreme_min_entry.delete(0, tk.END)
+            peak_clipping_extreme_min_entry.insert(0, restore_params.get('peak_clipping_extreme_min', '0.0'))
 
             # 恢复时间调整参数
             target_datetime_entry.delete(0, tk.END)
@@ -3252,6 +3508,30 @@ class EChartsEditor:
                     peak_clipping_max = float(peak_clipping_max_entry.get())
                     peak_clipping_min = float(peak_clipping_min_entry.get())
                     peak_clipping_method = peak_clipping_method_var.get()  # 获取削峰方式
+                    extreme_max_enabled = peak_clipping_extreme_max_var.get()  # 极大值不处理启用
+                    extreme_min_enabled = peak_clipping_extreme_min_var.get()  # 极小值不处理启用
+
+                    # 获取极值范围
+                    extreme_max_value = None
+                    extreme_min_value = None
+                    if extreme_max_enabled:
+                        try:
+                            extreme_max_value = float(peak_clipping_extreme_max_entry.get())
+                            if extreme_max_value <= peak_clipping_max:
+                                messagebox.showerror("错误", "极大值必须大于最大阈值！", parent=op_window)
+                                return
+                        except ValueError:
+                            messagebox.showerror("错误", "请输入有效的极大值！", parent=op_window)
+                            return
+                    if extreme_min_enabled:
+                        try:
+                            extreme_min_value = float(peak_clipping_extreme_min_entry.get())
+                            if extreme_min_value >= peak_clipping_min:
+                                messagebox.showerror("错误", "极小值必须小于最小阈值！", parent=op_window)
+                                return
+                        except ValueError:
+                            messagebox.showerror("错误", "请输入有效的极小值！", parent=op_window)
+                            return
 
                     # 如果是自定义值方式，获取自定义值
                     custom_value = None
@@ -3266,7 +3546,7 @@ class EChartsEditor:
                     if peak_clipping_start < 0 or peak_clipping_end < peak_clipping_start:
                         messagebox.showerror("错误", "作用范围无效！", parent=op_window)
                         return
-                    if peak_clipping_max <= peak_clipping_min:
+                    if not extreme_max_enabled and not extreme_min_enabled and peak_clipping_max <= peak_clipping_min:
                         messagebox.showerror("错误", "最大阈值必须大于最小阈值！", parent=op_window)
                         return
 
@@ -3297,8 +3577,19 @@ class EChartsEditor:
                                 if current_value is None:
                                     continue
 
-                                # 检查是否超出阈值
-                                if current_value > peak_clipping_max or current_value < peak_clipping_min:
+                                # 根据极值设置判断是否需要削峰
+                                # 超过极大值范围的不削峰
+                                if extreme_max_enabled and extreme_max_value is not None and current_value >= extreme_max_value:
+                                    exceeds_max = False
+                                else:
+                                    exceeds_max = current_value > peak_clipping_max
+                                # 低于极小值范围的不削峰
+                                if extreme_min_enabled and extreme_min_value is not None and current_value <= extreme_min_value:
+                                    below_min = False
+                                else:
+                                    below_min = current_value < peak_clipping_min
+
+                                if exceeds_max or below_min:
                                     if peak_clipping_method == "zero":
                                         # 方式1：直接设置为0
                                         data[i][1] = 0
@@ -3343,13 +3634,18 @@ class EChartsEditor:
                             total_clipped_points += clipped_points
 
                     type_name = "电压" if peak_clipping_type == "voltage" else "电流"
+                    skip_info = ""
+                    if extreme_max_enabled:
+                        skip_info += f"，极大值≥{extreme_max_value}不处理"
+                    if extreme_min_enabled:
+                        skip_info += f"，极小值≤{extreme_min_value}不处理"
                     if peak_clipping_method == "zero":
                         method_name = "设置为0"
                     elif peak_clipping_method == "custom":
                         method_name = f"自定义值({custom_value})"
                     else:
                         method_name = "替换为左右平均值"
-                    message = f"已对 {clipped_count} 个样品的{type_name}数据进行削峰处理（{method_name}），共处理 {total_clipped_points} 个异常点（阈值范围：{peak_clipping_min}-{peak_clipping_max}）"
+                    message = f"已对 {clipped_count} 个样品的{type_name}数据进行削峰处理（{method_name}），共处理 {total_clipped_points} 个异常点（阈值范围：{peak_clipping_min}-{peak_clipping_max}{skip_info}）"
 
                 elif operation == "smart_peak_clipping":
                     # 获取智能削峰参数
@@ -4183,6 +4479,10 @@ class EChartsEditor:
                     'peak_clipping_end': peak_clipping_end_entry.get() if peak_clipping_end_entry.get() else '100',
                     'peak_clipping_max': peak_clipping_max_entry.get() if peak_clipping_max_entry.get() else '5.0',
                     'peak_clipping_min': peak_clipping_min_entry.get() if peak_clipping_min_entry.get() else '0.0',
+                    'peak_clipping_extreme_max_enabled': peak_clipping_extreme_max_var.get(),
+                    'peak_clipping_extreme_max': peak_clipping_extreme_max_entry.get() if peak_clipping_extreme_max_entry.get() else '10.0',
+                    'peak_clipping_extreme_min_enabled': peak_clipping_extreme_min_var.get(),
+                    'peak_clipping_extreme_min': peak_clipping_extreme_min_entry.get() if peak_clipping_extreme_min_entry.get() else '0.0',
                     # 填充0值参数
                     'fill_zero_type': fill_zero_type_var.get(),
                     'fill_zero_start': fill_zero_start_entry.get() if fill_zero_start_entry.get() else '1',
