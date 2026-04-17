@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(python:*)",
+      "Bash(findstr:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(powershell:*)",
+      "Bash(timeout:*)",
+      "Read(//h/**)",
+      "Bash(cd:*)",
+      "Bash(打包成EXE.bat)",
+      "Bash(del:*)"
+    ]
+  }
+}
