@@ -53,8 +53,8 @@ class Parser740:
             offset = i * self.RECORD_SIZE
             rec = data[offset:offset + self.RECORD_SIZE]
 
-            # 头部校验 (前2字节固定为 1a 03)
-            if rec[0:2] != b'\x1a\x03':
+            # 头部校验 (首字节固定为 1a，第2字节为版本号，兼容 03/04 等)
+            if rec[0:1] != b'\x1a':
                 raise ValueError(f"记录 {i} 头部标识不匹配: {rec[0:4].hex()}")
 
             # 时间戳 (Unix timestamp, uint32 LE, offset 8)

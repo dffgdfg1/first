@@ -23,6 +23,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from PIL import Image
+import socket
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -296,21 +297,30 @@ class VoltageCurrentAnalyzer:
                 else:
                     logger.debug(f"  跳过高电流段{group_idx+1} (共{len(g)}个点, 低电流点仅{low_current_count}个)")
             else:
-                # 非uA单位，直接添加
-                sleep_groups.append(g)
+                # 非uA单位，过滤零电流段（电压不在14V时电流为0的数据点不参与统计）
+                group_currents = currents[g]
+                nonzero_mask = group_currents > 0
+                nonzero_count = np.sum(nonzero_mask)
+                if nonzero_count >= 50:
+                    sleep_groups.append(g)
+                    logger.info(f"  检测到休眠电流段{group_idx+1} (共{len(g)}个点, 非零电流点:{nonzero_count}个)")
+                else:
+                    logger.debug(f"  跳过段{group_idx+1} (共{len(g)}个点, 非零电流点仅{nonzero_count}个)")
 
         if not sleep_groups:
             return None
 
-        # 合并所有休眠组的稳定电流（只保留低电流部分）
+        # 合并所有休眠组的稳定电流（只保留有效电流部分）
         all_stable = []
         for g in sleep_groups:
             seg_c = currents[g]
-            
-            # 对于uA单位，只保留低电流部分（<10000uA）
+
+            # 过滤零电流（电压不在14V时对应的无效数据）
             if self.current_unit == 'uA':
-                low_mask = seg_c < 10000
+                low_mask = (seg_c > 0) & (seg_c < 10000)
                 seg_c = seg_c[low_mask]
+            else:
+                seg_c = seg_c[seg_c > 0]
             
             # 去掉前后5%的过渡数据（休眠电流使用更小的trim比例以保留更多真实数据）
             trim = int(len(seg_c) * 0.05)
@@ -541,20 +551,21 @@ class ChartScreenshot:
         options.add_argument('--headless')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--window-size=2560,1440')  # 提高窗口分辨率到2K
-        options.add_argument('--force-device-scale-factor=2')  # 2倍缩放提高清晰度
-        options.add_argument('--high-dpi-support=1')  # 启用高DPI支持
-        options.add_argument('--disable-gpu')  # 禁用GPU加速，提高稳定性
-        options.add_argument('--disable-software-rasterizer')  # 禁用软件光栅化
+        options.add_argument('--window-size=1920,1080')
+        options.add_argument('--disable-gpu')
+        options.add_argument('--disable-software-rasterizer')
         try:
+            # 在创建driver前设置socket级超时（适用于所有Selenium版本）
+            socket.setdefaulttimeout(600)
             # 直接使用 EdgeWebDriver 类而不是 webdriver.Edge()，避免 PyInstaller 打包问题
             self.driver = EdgeWebDriver(options=options)
             # 设置页面加载超时为600秒（10分钟）
             self.driver.set_page_load_timeout(600)
             # 设置脚本执行超时为600秒
             self.driver.set_script_timeout(600)
-            # 设置Selenium命令执行超时为600秒（解决大文件加载超时问题）
-            self.driver.command_executor._timeout = 600
+            # 修改 command_executor 的 client_config timeout，覆盖 urllib3 请求的 read timeout
+            # （socket.setdefaulttimeout 不能覆盖 urllib3 的显式超时，必须直接修改此值）
+            self.driver.command_executor._client_config.timeout = 600
             logger.info("浏览器初始化成功")
         except Exception as e:
             logger.error(f"浏览器初始化失败: {e}")
@@ -563,7 +574,8 @@ class ChartScreenshot:
 
     def capture(self, html_file: str, output_path: str) -> bool:
         """
-        截取HTML图表并保存为PNG，确保显示完整数据范围（0电压0电流可见）
+        截取HTML图表并保存为PNG，使用ECharts getDataURL直接导出画布，
+        避免save_screenshot传输整个浏览器窗口导致的超时问题。
 
         Args:
             html_file: HTML文件路径
@@ -571,121 +583,103 @@ class ChartScreenshot:
         Returns:
             bool: 是否成功
         """
+        import base64
         if not self.driver:
             self.init_browser()
 
         try:
             file_url = Path(html_file).resolve().as_uri()
+            logger.info(f"[截图] 加载页面: {file_url}")
             self.driver.get(file_url)
+            logger.info(f"[截图] 页面加载完成，等待canvas元素...")
 
-            # 等待ECharts渲染完成（增加超时时间以处理大文件）
-            time.sleep(5)
+            # 等待canvas元素出现（最多3分钟）
             WebDriverWait(self.driver, 180).until(
+                lambda d: d.execute_script("return document.querySelector('canvas') !== null")
+            )
+            logger.info(f"[截图] canvas元素已出现，等待ECharts实例初始化...")
+
+            # 通过JS轮询等待ECharts实例初始化完成，最多等待60秒
+            WebDriverWait(self.driver, 60).until(
                 lambda d: d.execute_script(
-                    "return document.querySelector('canvas') !== null"
+                    "var c = echarts.getInstanceByDom(document.getElementById('chart-container'));"
+                    "return c !== null && c !== undefined;"
                 )
             )
-            time.sleep(3)
+            logger.info(f"[截图] ECharts实例就绪，准备图表...")
 
-            # 页面缩放到70%，确保能看到底部时间轴
-            self.driver.execute_script("document.body.style.zoom='0.7'")
-            time.sleep(0.5)
-
-            # 重置dataZoom并调整图表尺寸确保完整显示
+            # 准备图表：重置dataZoom、隐藏控件、调整尺寸，并确保grid.bottom留足时间戳空间
+            # xAxis.axisLabel.fontSize=19，格式"{yyyy}-{MM}-{dd} {HH}:{mm}"，单行约40px
+            # grid.bottom=60 即可，设80留冗余；同时清除HTML里硬编码的height:"1080px"避免resize时被覆盖
             self.driver.execute_script("""
                 var chart = echarts.getInstanceByDom(document.getElementById('chart-container'));
                 if (!chart) return;
-
-                // 重置dataZoom到显示全部数据
-                chart.dispatchAction({
-                    type: 'dataZoom',
-                    start: 0,
-                    end: 100
-                });
-
-                // 隐藏dataZoom滑块和toolbox
+                chart.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
                 chart.setOption({
+                    height: null,
                     dataZoom: [{show: false}],
-                    toolbox: {show: false}
+                    toolbox: {show: false},
+                    grid: {bottom: 80}
                 });
-
-                // 调整图表高度，确保完整显示
                 var dom = chart.getDom();
+                dom.style.width  = '1920px';
                 dom.style.height = '1200px';
                 chart.resize();
             """)
+            logger.info(f"[截图] 图表resize完成，等待重绘...")
 
-            # 等待重绘完成
-            time.sleep(1)
+            # 等待resize重绘完成（用JS检测，避免固定sleep）
+            WebDriverWait(self.driver, 30).until(
+                lambda d: d.execute_script(
+                    "var c = echarts.getInstanceByDom(document.getElementById('chart-container'));"
+                    "var w = c && c.getDom().offsetWidth;"
+                    "return w >= 1900;"
+                )
+            )
+            logger.info(f"[截图] 重绘完成，调用getDataURL导出...")
 
-            # 截取整个可见页面
-            self.driver.save_screenshot(output_path)
+            # 用ECharts getDataURL直接导出画布为base64（pixelRatio=2保证清晰度）
+            # 比save_screenshot快得多：无需传输整个浏览器窗口
+            b64 = self.driver.execute_script("""
+                var chart = echarts.getInstanceByDom(document.getElementById('chart-container'));
+                if (!chart) return null;
+                var url = chart.getDataURL({
+                    type: 'png',
+                    pixelRatio: 2,
+                    backgroundColor: '#fff'
+                });
+                return url.replace('data:image/png;base64,', '');
+            """)
+            logger.info(f"[截图] getDataURL返回, 数据长度: {len(b64) if b64 else 0}")
 
-            # 打开图片并智能裁剪底部空白
-            img = Image.open(output_path)
-            img_array = np.array(img.convert('RGB'))
+            if not b64:
+                logger.error(f"截图失败 {html_file}: getDataURL 返回空值")
+                return False
 
-            height, width = img_array.shape[0], img_array.shape[1]
-            crop_bottom = height
+            # base64解码为图片
+            import io
+            img_data = base64.b64decode(b64)
+            img = Image.open(io.BytesIO(img_data))
+            logger.info(f"[截图] 图片解码成功: {img.width}x{img.height}")
 
-            # 方案：检测非白色/非背景色像素
-            # 1. 先检测背景色（取底部10行的众数颜色）
-            bottom_sample = img_array[-10:, :, :]
-            # 计算平均背景色
-            bg_color = np.mean(bottom_sample.reshape(-1, 3), axis=0)
-            logger.info(f"检测到背景色: RGB({bg_color[0]:.0f}, {bg_color[1]:.0f}, {bg_color[2]:.0f})")
-
-            # 2. 从底部向上扫描，找到第一行包含明显非背景色像素的位置
-            found = False
-            for y in range(height - 1, -1, -1):
-                row = img_array[y, :, :]
-
-                # 计算每个像素与背景色的欧氏距离
-                diff = np.sqrt(np.sum((row - bg_color) ** 2, axis=1))
-
-                # 统计明显不同于背景色的像素数量（距离>30）
-                non_bg_pixels = np.sum(diff > 30)
-
-                # 如果这一行有超过宽度5%的非背景像素，认为是内容行
-                if non_bg_pixels > width * 0.05:
-                    crop_bottom = min(y + 80, height)  # 保留80px边距
-                    logger.info(f"检测到内容行: y={y}, 非背景像素={non_bg_pixels}, 裁剪到: {crop_bottom}px")
-                    found = True
-                    break
-
-            # 裁剪图片
-            if found and crop_bottom < height:
-                img = img.crop((0, 0, img.width, crop_bottom))
-                logger.info(f"裁剪底部空白: {height}px -> {crop_bottom}px (减少{height - crop_bottom}px)")
-            else:
-                logger.info(f"未检测到需要裁剪的底部空白")
-
-            # 直接拉伸到3:2宽高比
-            # 目标宽度为15.5cm，使用300 DPI（打印质量）
-            # 15.5cm * 300 DPI / 2.54 = 1831px
-            target_ratio = 3.0 / 2.0  # 3:2比例
+            # 直接拉伸到3:2宽高比（1831x1220，300DPI打印质量）
             target_width_px = 1831
-            target_height_px = int(target_width_px / target_ratio)  # 按3:2计算高度 = 1221px
+            target_height_px = int(target_width_px / (3.0 / 2.0))  # = 1220px
 
-            current_width = img.width
-            current_height = img.height
-            current_ratio = current_width / current_height
+            logger.info(f"原始尺寸: {img.width}x{img.height}, 比例: {img.width/img.height:.2f}")
+            logger.info(f"目标尺寸: {target_width_px}x{target_height_px}, 比例: 1.50")
 
-            logger.info(f"原始尺寸: {current_width}x{current_height}, 比例: {current_ratio:.2f}")
-            logger.info(f"目标尺寸: {target_width_px}x{target_height_px}, 比例: {target_ratio:.2f}")
-
-            # 使用LANCZOS高质量重采样，直接拉伸到目标尺寸
             resized = img.resize((target_width_px, target_height_px), Image.LANCZOS)
             logger.info(f"已拉伸到3:2比例 ({target_width_px}x{target_height_px})")
 
-            # 设置DPI为300，确保打印质量
-            resized.save(output_path, dpi=(300, 300), quality=95)
-
+            resized.save(output_path, dpi=(300, 300))
             logger.info(f"截图已保存: {output_path}")
             return True
 
         except Exception as e:
-            logger.error(f"截图失败 {html_file}: {e}")
+            import traceback
+            logger.error(f"截图失败 {html_file}: {type(e).__name__}: {e}")
+            logger.info(f"截图异常详情:\n{traceback.format_exc()}")
             return False
 
     def close(self):

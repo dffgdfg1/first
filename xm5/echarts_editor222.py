@@ -82,11 +82,7 @@ class EChartsEditor:
         ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, padx=10, fill=tk.Y)
 
         # 新增功能按钮
-        ttk.Button(toolbar, text="全局操作", command=self.global_operations).pack(side=tk.LEFT, padx=5)
-        ttk.Button(toolbar, text="差异分析", command=self.difference_analysis).pack(side=tk.LEFT, padx=5)
-        ttk.Button(toolbar, text="对比视图", command=self.comparison_view).pack(side=tk.LEFT, padx=5)
-        ttk.Button(toolbar, text="再来一次", command=self.repeat_last_operation).pack(side=tk.LEFT, padx=5)
-        ttk.Button(toolbar, text="批量生成", command=self.batch_generate).pack(side=tk.LEFT, padx=5)
+
 
         ttk.Button(toolbar, text="退出", command=self.root.quit).pack(side=tk.RIGHT, padx=5)
 

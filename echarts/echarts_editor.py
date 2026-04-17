@@ -102,6 +102,10 @@ class EChartsEditor:
         self.search_entry.pack(side=tk.LEFT, padx=2)
         self.search_entry.bind('<Return>', lambda e: self.search_value())
         ttk.Button(toolbar_row3, text="搜索", command=self.search_value).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar_row3, text="上一个", command=self.search_prev).pack(side=tk.LEFT, padx=2)
+        ttk.Button(toolbar_row3, text="下一个", command=self.search_next).pack(side=tk.LEFT, padx=2)
+        self.search_pos_label = ttk.Label(toolbar_row3, text="")
+        self.search_pos_label.pack(side=tk.LEFT, padx=4)
 
         ttk.Button(toolbar_row3, text="退出", command=self.root.quit).pack(side=tk.RIGHT, padx=5)
 
@@ -148,6 +152,8 @@ class EChartsEditor:
         # 创建数据表格标签页（初始为空，加载文件后动态创建）
         self.series_frames = []
         self.tree_widgets = []  # 存储所有Treeview控件的引用
+        self.search_matched_items = []  # 当前搜索结果列表
+        self.search_current_index = -1  # 当前定位到第几个结果
 
     def load_multiple_files(self):
         """批量加载HTML文件"""
@@ -556,18 +562,50 @@ class EChartsEditor:
             except (ValueError, IndexError):
                 continue
 
+        self.search_matched_items = matched_items
+        self.search_current_index = -1
+
         if matched_items:
-            # 选中所有匹配的行
-            for item in matched_items:
-                tree.selection_add(item)
-
-            # 滚动到第一个匹配项
-            tree.see(matched_items[0])
-
+            self.search_current_index = 0
+            self._jump_to_search_index(tree)
             self.status_var.set(f"找到 {len(matched_items)} 个匹配的数值 (范围: {search_value-tolerance} ~ {search_value+tolerance})")
         else:
+            self.search_pos_label.config(text="")
             self.status_var.set(f"未找到匹配的数值 (范围: {search_value-tolerance} ~ {search_value+tolerance})")
             messagebox.showinfo("搜索结果", f"未找到数值范围 {search_value-tolerance} ~ {search_value+tolerance} 内的数据")
+
+    def _jump_to_search_index(self, tree=None):
+        """跳转到当前搜索索引对应的行"""
+        if not self.search_matched_items or self.search_current_index < 0:
+            return
+        if tree is None:
+            current_tab = self.notebook.index(self.notebook.select())
+            if current_tab >= len(self.tree_widgets):
+                return
+            tree = self.tree_widgets[current_tab]
+
+        item = self.search_matched_items[self.search_current_index]
+        tree.selection_set(item)
+        tree.see(item)
+        total = len(self.search_matched_items)
+        self.search_pos_label.config(text=f"{self.search_current_index + 1}/{total}")
+
+    def search_prev(self):
+        """跳转到上一个搜索结果"""
+        if not self.search_matched_items:
+            messagebox.showinfo("提示", "请先执行搜索！")
+            return
+        self.search_current_index = (self.search_current_index - 1) % len(self.search_matched_items)
+        self._jump_to_search_index()
+
+    def search_next(self):
+        """跳转到下一个搜索结果"""
+        if not self.search_matched_items:
+            messagebox.showinfo("提示", "请先执行搜索！")
+            return
+        self.search_current_index = (self.search_current_index + 1) % len(self.search_matched_items)
+        self._jump_to_search_index()
+
 
     def fill_missing_data(self):
         """填充缺失的时间序列数据（每段缺失可独立选择填充方式）"""
@@ -4743,7 +4781,8 @@ class EChartsEditor:
         # 创建批量生成窗口
         batch_window = tk.Toplevel(self.root)
         batch_window.title("批量生成HTML文件")
-        batch_window.geometry("800x700")  # 增加窗口高度，确保所有控件可见
+        batch_window.geometry("1050x700")
+        batch_window.minsize(1050, 700)
 
         # 按钮框架（先创建，固定在窗口底部）
         btn_frame = ttk.Frame(batch_window)
@@ -4930,7 +4969,12 @@ class EChartsEditor:
         peak_threshold_entry = ttk.Entry(params_frame, width=15)
         peak_threshold_entry.grid(row=11, column=3, padx=5, pady=5)
         peak_threshold_entry.insert(0, saved_params.get("peak_threshold", ""))
-        ttk.Label(params_frame, text="（超过此值的数据将被替换为平均值）").grid(row=11, column=4, sticky=tk.W, pady=5)
+        ttk.Label(params_frame, text="最短持续点数:").grid(row=11, column=4, sticky=tk.E, pady=5)
+        peak_min_duration_entry = ttk.Entry(params_frame, width=8)
+        peak_min_duration_entry.grid(row=11, column=5, padx=5, pady=5)
+        peak_min_duration_entry.insert(0, saved_params.get("peak_min_duration", ""))
+        ttk.Label(params_frame, text="（空=全削；填N则连续超阈值点数<N才削，≥N视为坡度保留）",
+                  foreground='gray').grid(row=11, column=6, sticky=tk.W, pady=5)
 
         # 零值处理选项
         zero_handling_var = tk.StringVar(value=saved_params.get("zero_handling", "default"))
@@ -4957,11 +5001,38 @@ class EChartsEditor:
         smooth_window_entry.insert(0, saved_params.get("smooth_window", "5"))
         ttk.Label(params_frame, text="（每N个时间戳取平均值，建议3-10）").grid(row=14, column=3, sticky=tk.W, pady=5, columnspan=2)
 
+        # 自定义异常值范围选项（配合平滑使用）
+        smooth_custom_range_var = tk.BooleanVar(value=saved_params.get("smooth_custom_range_enabled", False))
+
+        def toggle_custom_range():
+            state = tk.NORMAL if smooth_custom_range_var.get() else tk.DISABLED
+            smooth_custom_min_entry.config(state=state)
+            smooth_custom_max_entry.config(state=state)
+
+        smooth_custom_range_cb = ttk.Checkbutton(params_frame, text="自定义异常值范围（此范围外的值不参与平滑计算且被保留）:",
+                                                  variable=smooth_custom_range_var, command=toggle_custom_range)
+        smooth_custom_range_cb.grid(row=15, column=0, columnspan=2, sticky=tk.W, pady=5)
+
+        ttk.Label(params_frame, text="最小值:").grid(row=15, column=2, sticky=tk.E, pady=5)
+        smooth_custom_min_entry = ttk.Entry(params_frame, width=10)
+        smooth_custom_min_entry.grid(row=15, column=3, padx=5, pady=5, sticky=tk.W)
+        smooth_custom_min_entry.insert(0, saved_params.get("smooth_custom_min", ""))
+
+        ttk.Label(params_frame, text="最大值:").grid(row=15, column=4, sticky=tk.E, pady=5)
+        smooth_custom_max_entry = ttk.Entry(params_frame, width=10)
+        smooth_custom_max_entry.grid(row=15, column=5, padx=5, pady=5, sticky=tk.W)
+        smooth_custom_max_entry.insert(0, saved_params.get("smooth_custom_max", ""))
+
+        # 初始状态
+        if not smooth_custom_range_var.get():
+            smooth_custom_min_entry.config(state=tk.DISABLED)
+            smooth_custom_max_entry.config(state=tk.DISABLED)
+
         # 记住参数复选框
         remember_params_var = tk.BooleanVar(value=saved_params.get("remember", False))
         remember_checkbox = ttk.Checkbutton(params_frame, text="记住我的参数设置（下次打开自动加载）",
                                            variable=remember_params_var)
-        remember_checkbox.grid(row=15, column=0, columnspan=5, sticky=tk.W, pady=10)
+        remember_checkbox.grid(row=16, column=0, columnspan=5, sticky=tk.W, pady=10)
 
         def start_batch_generate():
             try:
@@ -4986,6 +5057,11 @@ class EChartsEditor:
                 peak_clip_enabled = peak_clip_enabled_var.get()
                 peak_threshold_str = peak_threshold_entry.get().strip()
                 peak_threshold = float(peak_threshold_str) if peak_threshold_str else None
+                peak_min_duration_str = peak_min_duration_entry.get().strip()
+                peak_min_duration = int(peak_min_duration_str) if peak_min_duration_str else None
+                if peak_min_duration is not None and peak_min_duration < 1:
+                    messagebox.showerror("错误", "最短持续点数必须大于等于1！", parent=batch_window)
+                    return
 
                 # 获取零值处理选项
                 zero_handling = zero_handling_var.get()
@@ -4996,6 +5072,11 @@ class EChartsEditor:
                 # 获取平滑输出选项
                 smooth_enabled = smooth_enabled_var.get()
                 smooth_window = int(smooth_window_entry.get()) if smooth_enabled else 1
+                smooth_custom_range_enabled = smooth_custom_range_var.get() and smooth_enabled
+                smooth_custom_min_str = smooth_custom_min_entry.get().strip()
+                smooth_custom_max_str = smooth_custom_max_entry.get().strip()
+                smooth_custom_min = float(smooth_custom_min_str) if smooth_custom_range_enabled and smooth_custom_min_str else None
+                smooth_custom_max = float(smooth_custom_max_str) if smooth_custom_range_enabled and smooth_custom_max_str else None
 
                 # 验证参数
                 if count <= 0 or count > 1000:
@@ -5022,6 +5103,14 @@ class EChartsEditor:
                     messagebox.showerror("错误", "平滑窗口大小必须大于等于2！", parent=batch_window)
                     return
 
+                if smooth_custom_range_enabled:
+                    if smooth_custom_min is None or smooth_custom_max is None:
+                        messagebox.showerror("错误", "启用自定义异常值范围时，最小值和最大值均不能为空！", parent=batch_window)
+                        return
+                    if smooth_custom_min >= smooth_custom_max:
+                        messagebox.showerror("错误", "自定义异常值范围：最小值必须小于最大值！", parent=batch_window)
+                        return
+
                 # 确认生成
                 if not messagebox.askyesno("确认", f"将生成 {count} 个HTML文件到：\n{output_dir}\n\n确定继续吗？", parent=batch_window):
                     return
@@ -5042,10 +5131,14 @@ class EChartsEditor:
                         "sample_rate": sample_rate_entry.get(),
                         "peak_clip_enabled": peak_clip_enabled,
                         "peak_threshold": peak_threshold_entry.get(),
+                        "peak_min_duration": peak_min_duration_entry.get(),
                         "zero_handling": zero_handling,
                         "power_cycle_count": power_cycle_count,
                         "smooth_enabled": smooth_enabled,
                         "smooth_window": smooth_window_entry.get(),
+                        "smooth_custom_range_enabled": smooth_custom_range_var.get(),
+                        "smooth_custom_min": smooth_custom_min_entry.get(),
+                        "smooth_custom_max": smooth_custom_max_entry.get(),
                         "remember": True
                     }
                     try:
@@ -5311,39 +5404,44 @@ class EChartsEditor:
 
                     # 应用批削峰
                     if peak_clip_enabled and peak_threshold is not None:
+                        def _clip_series(data, avg_value):
+                            """对一个series的data列表按连续段逻辑削峰"""
+                            bound = min(range_end + 1, len(data))
+                            i = range_start
+                            while i < bound:
+                                if isinstance(data[i], list) and len(data[i]) >= 2 and data[i][1] is not None and data[i][1] > peak_threshold:
+                                    # 找连续超阈值段的结束位置
+                                    run_start = i
+                                    while i < bound and isinstance(data[i], list) and len(data[i]) >= 2 and data[i][1] is not None and data[i][1] > peak_threshold:
+                                        i += 1
+                                    run_length = i - run_start
+                                    # 若未设最短持续点数，或连续段长度 < 最短持续点数，则削峰
+                                    if peak_min_duration is None or run_length < peak_min_duration:
+                                        for k in range(run_start, i):
+                                            data[k][1] = avg_value
+                                    # 否则视为坡度，保留
+                                else:
+                                    i += 1
+
                         # 对电流数据进行削峰
                         if (data_type == "current" or data_type == "both") and len(new_file_data['series']) >= 2:
                             current_series = new_file_data['series'][1]
                             data = current_series['data']
-
-                            # 计算指定范围内的平均值
                             valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
                                           if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
                             if valid_values:
                                 avg_value = sum(valid_values) / len(valid_values)
-
-                                # 替换超过峰值的数据为平均值
-                                for j in range(range_start, min(range_end + 1, len(data))):
-                                    if isinstance(data[j], list) and len(data[j]) >= 2:
-                                        if data[j][1] is not None and data[j][1] > peak_threshold:
-                                            data[j][1] = avg_value
+                                _clip_series(data, avg_value)
 
                         # 对电压数据进行削峰
                         if (data_type == "voltage" or data_type == "both") and len(new_file_data['series']) >= 1:
                             voltage_series = new_file_data['series'][0]
                             data = voltage_series['data']
-
-                            # 计算指定范围内的平均值
                             valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
                                           if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
                             if valid_values:
                                 avg_value = sum(valid_values) / len(valid_values)
-
-                                # 替换超过峰值的数据为平均值
-                                for j in range(range_start, min(range_end + 1, len(data))):
-                                    if isinstance(data[j], list) and len(data[j]) >= 2:
-                                        if data[j][1] is not None and data[j][1] > peak_threshold:
-                                            data[j][1] = avg_value
+                                _clip_series(data, avg_value)
 
                     # 应用平滑输出（移动平均）
                     if smooth_enabled and smooth_window >= 2:
@@ -5366,6 +5464,11 @@ class EChartsEditor:
                                         smoothed_data.append([timestamp, None])
                                         continue
 
+                                    # 如果启用自定义异常值范围且当前值在范围外，视为需要保留的异常值，不平滑
+                                    if smooth_custom_range_enabled and not (smooth_custom_min <= value <= smooth_custom_max):
+                                        smoothed_data.append([timestamp, value])
+                                        continue
+
                                     # 获取当前点的电压值
                                     current_voltage = None
                                     if j < len(voltage_data) and isinstance(voltage_data[j], list) and len(voltage_data[j]) >= 2:
@@ -5386,6 +5489,9 @@ class EChartsEditor:
                                     window_values = []
                                     for k in range(start_idx, end_idx):
                                         if isinstance(current_data[k], list) and len(current_data[k]) >= 2 and current_data[k][1] is not None:
+                                            # 如果启用自定义范围，排除窗口内的异常值
+                                            if smooth_custom_range_enabled and not (smooth_custom_min <= current_data[k][1] <= smooth_custom_max):
+                                                continue
                                             # 检查对应的电压值
                                             if k < len(voltage_data) and isinstance(voltage_data[k], list) and len(voltage_data[k]) >= 2:
                                                 window_voltage = voltage_data[k][1]
@@ -5440,6 +5546,11 @@ class EChartsEditor:
                                         smoothed_data.append([timestamp, None])
                                         continue
 
+                                    # 如果启用自定义异常值范围且当前值在范围外，视为需要保留的异常值，不平滑
+                                    if smooth_custom_range_enabled and not (smooth_custom_min <= value <= smooth_custom_max):
+                                        smoothed_data.append([timestamp, value])
+                                        continue
+
                                     # 计算窗口范围（中心对齐）
                                     half_window = smooth_window // 2
                                     start_idx = max(0, j - half_window)
@@ -5449,6 +5560,9 @@ class EChartsEditor:
                                     window_values = []
                                     for k in range(start_idx, end_idx):
                                         if isinstance(data[k], list) and len(data[k]) >= 2 and data[k][1] is not None:
+                                            # 如果启用自定义范围，排除窗口内的异常值
+                                            if smooth_custom_range_enabled and not (smooth_custom_min <= data[k][1] <= smooth_custom_max):
+                                                continue
                                             window_values.append(data[k][1])
 
                                     # 计算平均值
