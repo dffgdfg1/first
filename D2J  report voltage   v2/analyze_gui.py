@@ -74,6 +74,7 @@ class AnalyzeGUI:
         self.var_min_points = tk.IntVar(value=MIN_STABLE_POINTS)
         self.var_outlier = tk.DoubleVar(value=OUTLIER_STD_FACTOR)  # 默认3.5，更宽松
         self.var_screenshot = tk.BooleanVar(value=True)
+        self.var_partial_screenshot = tk.BooleanVar(value=False)
         self.var_project = tk.StringVar(value='D2J')
 
         # 参数说明：电压容差(V) - 匹配目标电压时的允许偏差范围
@@ -93,10 +94,11 @@ class AnalyzeGUI:
             self._create_tooltip(entry, tooltip)
 
         ttk.Checkbutton(param_frame, text="截取图表截图", variable=self.var_screenshot).grid(row=0, column=6, padx=8)
+        ttk.Checkbutton(param_frame, text="额外生成局部截图", variable=self.var_partial_screenshot).grid(row=0, column=7, padx=8)
 
         # 批量分析输出路径选项
         self.var_output_to_source = tk.BooleanVar(value=True)
-        ttk.Checkbutton(param_frame, text="输出到源文件夹", variable=self.var_output_to_source).grid(row=0, column=7, padx=8)
+        ttk.Checkbutton(param_frame, text="输出到源文件夹", variable=self.var_output_to_source).grid(row=0, column=8, padx=8)
 
         # 项目选择
         ttk.Label(param_frame, text="项目类型:").grid(row=1, column=0, sticky=tk.W, padx=(0, 2), pady=(4, 0))
@@ -391,6 +393,12 @@ class AnalyzeGUI:
         work_screenshot_dir.mkdir(parents=True, exist_ok=True)
         sleep_screenshot_dir = output_dir / "休眠电流截图"
         sleep_screenshot_dir.mkdir(parents=True, exist_ok=True)
+        do_partial_screenshot = do_screenshot and self.var_partial_screenshot.get()
+        work_partial_screenshot_dir = output_dir / "工作模式局部截图"
+        sleep_partial_screenshot_dir = output_dir / "休眠模式局部截图"
+        if do_partial_screenshot:
+            work_partial_screenshot_dir.mkdir(parents=True, exist_ok=True)
+            sleep_partial_screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         browser_ok = False
         if do_screenshot and folder_idx == 1:  # 只在第一个文件夹时初始化浏览器
@@ -484,10 +492,18 @@ class AnalyzeGUI:
                     work_img = work_screenshot_dir / f"{i}号样机工作电压电流.png"
                     self._log(f"    截取工作模式图表: {work_file.name}")
                     screenshot.capture(str(work_file), str(work_img))
+                    if do_partial_screenshot:
+                        work_partial_img = work_partial_screenshot_dir / f"{i}号样机工作电压电流局部.png"
+                        self._log(f"    截取工作模式局部图表: {work_file.name}")
+                        screenshot.capture(str(work_file), str(work_partial_img), zoom_hours=2)
                 if sleep_file:
                     sleep_img = sleep_screenshot_dir / f"{i}号样机休眠电流.png"
                     self._log(f"    截取休眠模式图表: {sleep_file.name}")
                     screenshot.capture(str(sleep_file), str(sleep_img))
+                    if do_partial_screenshot:
+                        sleep_partial_img = sleep_partial_screenshot_dir / f"{i}号样机休眠电流局部.png"
+                        self._log(f"    截取休眠模式局部图表: {sleep_file.name}")
+                        screenshot.capture(str(sleep_file), str(sleep_partial_img), zoom_hours=2)
 
         # 最后一个文件夹处理完后关闭浏览器
         if folder_idx == total_folders and hasattr(self, 'screenshot_instance'):
@@ -512,6 +528,12 @@ class AnalyzeGUI:
         work_screenshot_dir.mkdir(parents=True, exist_ok=True)
         sleep_screenshot_dir = output_dir / "休眠电流截图"
         sleep_screenshot_dir.mkdir(parents=True, exist_ok=True)
+        do_partial_screenshot = do_screenshot and self.var_partial_screenshot.get()
+        work_partial_screenshot_dir = output_dir / "工作模式局部截图"
+        sleep_partial_screenshot_dir = output_dir / "休眠模式局部截图"
+        if do_partial_screenshot:
+            work_partial_screenshot_dir.mkdir(parents=True, exist_ok=True)
+            sleep_partial_screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         browser_ok = False
         if do_screenshot:
@@ -595,10 +617,18 @@ class AnalyzeGUI:
                     work_img = work_screenshot_dir / f"{i}号样机工作电压电流.png"
                     self._log(f"[{i}号样机] 截取工作模式图表: {work_file.name}")
                     screenshot.capture(str(work_file), str(work_img))
+                    if do_partial_screenshot:
+                        work_partial_img = work_partial_screenshot_dir / f"{i}号样机工作电压电流局部.png"
+                        self._log(f"[{i}号样机] 截取工作模式局部图表: {work_file.name}")
+                        screenshot.capture(str(work_file), str(work_partial_img), zoom_hours=2)
                 if sleep_file:
                     sleep_img = sleep_screenshot_dir / f"{i}号样机休眠电流.png"
                     self._log(f"[{i}号样机] 截取休眠模式图表: {sleep_file.name}")
                     screenshot.capture(str(sleep_file), str(sleep_img))
+                    if do_partial_screenshot:
+                        sleep_partial_img = sleep_partial_screenshot_dir / f"{i}号样机休眠电流局部.png"
+                        self._log(f"[{i}号样机] 截取休眠模式局部图表: {sleep_file.name}")
+                        screenshot.capture(str(sleep_file), str(sleep_partial_img), zoom_hours=2)
 
         if screenshot and browser_ok:
             screenshot.close()
@@ -699,6 +729,12 @@ class AnalyzeGUI:
         work_screenshot_dir.mkdir(parents=True, exist_ok=True)
         sleep_screenshot_dir = output_dir / "休眠电流截图"
         sleep_screenshot_dir.mkdir(parents=True, exist_ok=True)
+        do_partial_screenshot = do_screenshot and self.var_partial_screenshot.get()
+        work_partial_screenshot_dir = output_dir / "工作模式局部截图"
+        sleep_partial_screenshot_dir = output_dir / "休眠模式局部截图"
+        if do_partial_screenshot:
+            work_partial_screenshot_dir.mkdir(parents=True, exist_ok=True)
+            sleep_partial_screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         browser_ok = False
         if do_screenshot and folder_idx == 1:
@@ -776,10 +812,18 @@ class AnalyzeGUI:
                     work_img = work_screenshot_dir / f"{i}号样机工作电压电流.png"
                     self._log(f"      截取工作模式图表: {work_file.name}")
                     screenshot.capture(str(work_file), str(work_img))
+                    if do_partial_screenshot:
+                        work_partial_img = work_partial_screenshot_dir / f"{i}号样机工作电压电流局部.png"
+                        self._log(f"      截取工作模式局部图表: {work_file.name}")
+                        screenshot.capture(str(work_file), str(work_partial_img), zoom_hours=2)
                 if sleep_file:
                     sleep_img = sleep_screenshot_dir / f"{i}号样机休眠电流.png"
                     self._log(f"      截取休眠模式图表: {sleep_file.name}")
                     screenshot.capture(str(sleep_file), str(sleep_img))
+                    if do_partial_screenshot:
+                        sleep_partial_img = sleep_partial_screenshot_dir / f"{i}号样机休眠电流局部.png"
+                        self._log(f"      截取休眠模式局部图表: {sleep_file.name}")
+                        screenshot.capture(str(sleep_file), str(sleep_partial_img), zoom_hours=2)
 
         # 最后一个文件夹处理完后关闭浏览器
         if folder_idx == total_folders and hasattr(self, 'screenshot_instance'):

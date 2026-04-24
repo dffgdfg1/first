@@ -1,4 +1,4 @@
-"""
+﻿"""
 ECharts HTML数据编辑器
 ===================
 
@@ -90,7 +90,9 @@ class EChartsEditor:
         ttk.Button(toolbar_row2, text="差异分析", command=self.difference_analysis).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar_row2, text="对比视图", command=self.comparison_view).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar_row2, text="再来一次", command=self.repeat_last_operation).pack(side=tk.LEFT, padx=5)
-        ttk.Button(toolbar_row2, text="批量生成", command=self.batch_generate).pack(side=tk.LEFT, padx=5)
+        ttk.Button(toolbar_row2, text="批生成工作模式", command=lambda: self.batch_generate("work")).pack(side=tk.LEFT, padx=5)
+        ttk.Button(toolbar_row2, text="批生成休眠模式", command=lambda: self.batch_generate("sleep")).pack(side=tk.LEFT, padx=5)
+        ttk.Button(toolbar_row2, text="一键批生成", command=self.one_click_batch_generate).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar_row2, text="填充缺失数据", command=self.fill_missing_data).pack(side=tk.LEFT, padx=5)
 
         # 第三行：搜索功能和退出按钮
@@ -760,58 +762,79 @@ class EChartsEditor:
         ttk.Button(global_frame, text="应用", command=apply_global_method).pack(side=tk.LEFT, padx=5)
 
         def apply_fill():
-            filled_count = 0
+            try:
+                filled_count = 0
 
-            # 从后往前填充，避免索引变化问题
-            for gap_idx, gap in enumerate(reversed(gaps)):
-                # 获取该段对应的填充方式（注意reversed顺序）
-                combo = gap_method_vars[len(gaps) - 1 - gap_idx]
-                selected_label = combo.get()
-                # 将显示标签转回方法key
-                method = method_keys[method_labels.index(selected_label)]
+                # 从后往前填充，避免索引变化问题
+                for gap_idx, gap in enumerate(reversed(gaps)):
+                    # 获取该段对应的填充方式（注意reversed顺序）
+                    combo = gap_method_vars[len(gaps) - 1 - gap_idx]
+                    selected_label = combo.get()
+                    # 将显示标签转回方法key
+                    method = method_keys[method_labels.index(selected_label)]
 
-                idx = gap['index']
-                start_time = gap['start_time']
-                start_value = gap['start_value']
-                end_value = gap['end_value']
-                missing_count = gap['missing_count']
+                    idx = gap['index']
+                    start_time = gap['start_time']
+                    start_value = gap['start_value']
+                    end_value = gap['end_value']
+                    missing_count = gap['missing_count']
 
-                # 生成填充的数据点
-                filled_data = []
-                for i in range(1, missing_count + 1):
-                    # 计算时间戳
-                    new_time = start_time + i * median_diff
+                    # None值处理：无法做插值时退回到zero
+                    sv_valid = start_value is not None
+                    ev_valid = end_value is not None
 
-                    # 根据方法计算数值
-                    if method == "linear":
-                        ratio = i / (missing_count + 1)
-                        new_value = start_value + (end_value - start_value) * ratio
-                    elif method == "forward":
-                        new_value = start_value
-                    elif method == "backward":
-                        new_value = end_value
-                    elif method == "average":
-                        new_value = (start_value + end_value) / 2
-                    elif method == "zero":
-                        new_value = 0
-                    else:
-                        new_value = 0
+                    # 生成填充的数据点
+                    filled_data = []
+                    for i in range(1, missing_count + 1):
+                        # 计算时间戳
+                        new_time = start_time + i * median_diff
 
-                    filled_data.append([new_time, new_value])
+                        # 根据方法计算数值
+                        if method == "linear":
+                            if sv_valid and ev_valid:
+                                ratio = i / (missing_count + 1)
+                                new_value = start_value + (end_value - start_value) * ratio
+                            elif sv_valid:
+                                new_value = start_value
+                            elif ev_valid:
+                                new_value = end_value
+                            else:
+                                new_value = None
+                        elif method == "forward":
+                            new_value = start_value if sv_valid else (end_value if ev_valid else None)
+                        elif method == "backward":
+                            new_value = end_value if ev_valid else (start_value if sv_valid else None)
+                        elif method == "average":
+                            if sv_valid and ev_valid:
+                                new_value = (start_value + end_value) / 2
+                            elif sv_valid:
+                                new_value = start_value
+                            elif ev_valid:
+                                new_value = end_value
+                            else:
+                                new_value = None
+                        elif method == "zero":
+                            new_value = 0
+                        else:
+                            new_value = 0
 
-                # 插入填充的数据
-                for i, point in enumerate(filled_data):
-                    data.insert(idx + 1 + i, point)
-                    filled_count += 1
+                        filled_data.append([new_time, new_value])
 
-            # 解绑鼠标滚轮，避免dialog关闭后报错
-            canvas.unbind_all("<MouseWheel>")
+                    # 插入填充的数据
+                    for i, point in enumerate(filled_data):
+                        data.insert(idx + 1 + i, point)
+                        filled_count += 1
 
-            # 更新显示
-            self.display_data()
-            fill_dialog.destroy()
-            self.status_var.set(f"已填充 {filled_count} 个数据点")
-            messagebox.showinfo("完成", f"成功填充 {filled_count} 个数据点！")
+                # 解绑鼠标滚轮，避免dialog关闭后报错
+                canvas.unbind_all("<MouseWheel>")
+
+                # 更新显示
+                self.display_data()
+                fill_dialog.destroy()
+                self.status_var.set(f"已填充 {filled_count} 个数据点")
+                messagebox.showinfo("完成", f"成功填充 {filled_count} 个数据点！")
+            except Exception as e:
+                messagebox.showerror("填充失败", f"填充过程中发生错误：\n{e}")
 
         def cancel_fill():
             canvas.unbind_all("<MouseWheel>")
@@ -1649,8 +1672,12 @@ class EChartsEditor:
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
-        # 绑定鼠标滚轮事件
+        # 绑定鼠标滚轮事件（Combobox上滚动时不滚动页面）
         def _on_mousewheel(event):
+            widget = event.widget
+            # 如果当前滚动的是Combobox（日期选择器），不滚动页面
+            if isinstance(widget, ttk.Combobox):
+                return
             canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
         canvas.bind_all("<MouseWheel>", _on_mousewheel)
@@ -2374,73 +2401,242 @@ class EChartsEditor:
         ttk.Button(cycle_copy_params_frame, text="全部", command=fill_cycle_copy_all, width=6).grid(row=1, column=4, padx=2)
 
         # 开始日期时间选择
-        ttk.Label(cycle_copy_params_frame, text="开始日期时间:").grid(row=2, column=0, sticky=tk.W, pady=2)
-
-        start_date_frame = ttk.Frame(cycle_copy_params_frame)
-        start_date_frame.grid(row=2, column=1, columnspan=5, sticky=tk.W, pady=2)
-
-        # 年月日选择
         from datetime import datetime, timedelta
         now = datetime.now()
 
-        # 禁用Combobox的鼠标滚轮和上下键事件的函数
-        def disable_mousewheel(widget):
-            def ignore_event(event):
-                return "break"
-            widget.bind("<MouseWheel>", ignore_event)
-            widget.bind("<Up>", ignore_event)
-            widget.bind("<Down>", ignore_event)
-
-        ttk.Label(start_date_frame, text="年:").pack(side=tk.LEFT, padx=2)
-        start_year_var = tk.StringVar(value=str(now.year))
-        start_year_combo = ttk.Combobox(start_date_frame, textvariable=start_year_var, width=6, state='readonly')
-        start_year_combo['values'] = [str(y) for y in range(2020, 2031)]
-        start_year_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(start_year_combo)
-
-        ttk.Label(start_date_frame, text="月:").pack(side=tk.LEFT, padx=2)
-        start_month_var = tk.StringVar(value=str(now.month).zfill(2))
-        start_month_combo = ttk.Combobox(start_date_frame, textvariable=start_month_var, width=4, state='readonly')
-        start_month_combo['values'] = [str(m).zfill(2) for m in range(1, 13)]
-        start_month_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(start_month_combo)
-
-        ttk.Label(start_date_frame, text="日:").pack(side=tk.LEFT, padx=2)
-        start_day_var = tk.StringVar(value=str(now.day).zfill(2))
-        start_day_combo = ttk.Combobox(start_date_frame, textvariable=start_day_var, width=4, state='readonly')
-        start_day_combo['values'] = [str(d).zfill(2) for d in range(1, 32)]
-        start_day_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(start_day_combo)
-
-        ttk.Label(start_date_frame, text="时:").pack(side=tk.LEFT, padx=2)
-        start_hour_var = tk.StringVar(value=str(now.hour).zfill(2))
-        start_hour_combo = ttk.Combobox(start_date_frame, textvariable=start_hour_var, width=4, state='readonly')
-        start_hour_combo['values'] = [str(h).zfill(2) for h in range(0, 24)]
-        start_hour_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(start_hour_combo)
-
-        ttk.Label(start_date_frame, text="分:").pack(side=tk.LEFT, padx=2)
+        # 内部六变量（供 calc_end_time / preset / save 等复用）
+        start_year_var   = tk.StringVar(value=str(now.year))
+        start_month_var  = tk.StringVar(value=str(now.month).zfill(2))
+        start_day_var    = tk.StringVar(value=str(now.day).zfill(2))
+        start_hour_var   = tk.StringVar(value=str(now.hour).zfill(2))
         start_minute_var = tk.StringVar(value=str(now.minute).zfill(2))
-        start_minute_combo = ttk.Combobox(start_date_frame, textvariable=start_minute_var, width=4, state='readonly')
-        start_minute_combo['values'] = [str(m).zfill(2) for m in range(0, 60)]
-        start_minute_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(start_minute_combo)
-
-        ttk.Label(start_date_frame, text="秒:").pack(side=tk.LEFT, padx=2)
         start_second_var = tk.StringVar(value=str(now.second).zfill(2))
-        start_second_combo = ttk.Combobox(start_date_frame, textvariable=start_second_var, width=4, state='readonly')
-        start_second_combo['values'] = [str(s).zfill(2) for s in range(0, 60)]
-        start_second_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(start_second_combo)
+
+        end_tomorrow = now + timedelta(days=1)
+        end_year_var   = tk.StringVar(value=str(end_tomorrow.year))
+        end_month_var  = tk.StringVar(value=str(end_tomorrow.month).zfill(2))
+        end_day_var    = tk.StringVar(value=str(end_tomorrow.day).zfill(2))
+        end_hour_var   = tk.StringVar(value=str(end_tomorrow.hour).zfill(2))
+        end_minute_var = tk.StringVar(value=str(end_tomorrow.minute).zfill(2))
+        end_second_var = tk.StringVar(value=str(end_tomorrow.second).zfill(2))
+
+        def _get_dt_from_vars(y, mo, d, h, mi, s):
+            return f"{y.get()}-{mo.get()}-{d.get()} {h.get()}:{mi.get()}:{s.get()}"
+
+        def _set_vars_from_dt(dt, y, mo, d, h, mi, s):
+            y.set(str(dt.year))
+            mo.set(str(dt.month).zfill(2))
+            d.set(str(dt.day).zfill(2))
+            h.set(str(dt.hour).zfill(2))
+            mi.set(str(dt.minute).zfill(2))
+            s.set(str(dt.second).zfill(2))
+
+        def open_datetime_picker(title, y_var, mo_var, d_var, h_var, mi_var, s_var, display_lbl):
+            """弹出日历+时间滚轮选择器"""
+            popup = tk.Toplevel(op_window)
+            popup.title(title)
+            popup.resizable(False, False)
+            popup.grab_set()
+
+            # 当前选中状态
+            sel_year  = tk.IntVar(value=int(y_var.get()))
+            sel_month = tk.IntVar(value=int(mo_var.get()))
+            sel_day   = tk.IntVar(value=int(d_var.get()))
+            sel_hour  = tk.StringVar(value=h_var.get())
+            sel_min   = tk.StringVar(value=mi_var.get())
+            sel_sec   = tk.StringVar(value=s_var.get())
+
+            # 顶部显示标签
+            top_lbl = ttk.Label(popup, font=("", 11, "bold"))
+            top_lbl.pack(pady=6)
+
+            def refresh_top():
+                top_lbl.config(text=f"{sel_year.get():04d}-{sel_month.get():02d}-{sel_day.get():02d}  "
+                                    f"{sel_hour.get()}:{sel_min.get()}:{sel_sec.get()}")
+            refresh_top()
+
+            body = ttk.Frame(popup)
+            body.pack(padx=10, pady=4)
+
+            # ── 左侧：日历 ──────────────────────────────────────────
+            cal_frame = ttk.LabelFrame(body, text="日期")
+            cal_frame.grid(row=0, column=0, padx=(0, 10), sticky="n")
+
+            nav = ttk.Frame(cal_frame)
+            nav.pack()
+
+            cal_grid = ttk.Frame(cal_frame)
+            cal_grid.pack()
+
+            day_btns = {}
+
+            def build_calendar():
+                for w in cal_grid.winfo_children():
+                    w.destroy()
+                day_btns.clear()
+                import calendar
+                y, m = sel_year.get(), sel_month.get()
+                for i, name in enumerate(["一","二","三","四","五","六","日"]):
+                    ttk.Label(cal_grid, text=name, width=3, anchor="center").grid(row=0, column=i, padx=1)
+                first_wd, days_in_month = calendar.monthrange(y, m)
+                first_wd = (first_wd) % 7  # Mon=0
+                row, col = 1, first_wd
+                for day in range(1, days_in_month + 1):
+                    d = day
+                    btn = tk.Button(cal_grid, text=str(d), width=3,
+                                    relief="flat", bg="#f0f0f0",
+                                    command=lambda dd=d: select_day(dd))
+                    btn.grid(row=row, column=col, padx=1, pady=1)
+                    day_btns[d] = btn
+                    col += 1
+                    if col == 7:
+                        col = 0
+                        row += 1
+                highlight_day()
+
+            def highlight_day():
+                cur = sel_day.get()
+                import calendar
+                _, days_in = calendar.monthrange(sel_year.get(), sel_month.get())
+                for d, btn in day_btns.items():
+                    if d == cur:
+                        btn.config(bg="#4a90d9", fg="white", relief="sunken")
+                    else:
+                        btn.config(bg="#f0f0f0", fg="black", relief="flat")
+
+            def select_day(d):
+                sel_day.set(d)
+                highlight_day()
+                refresh_top()
+
+            def nav_month(delta):
+                y, m = sel_year.get(), sel_month.get()
+                m += delta
+                while m > 12: m -= 12; y += 1
+                while m < 1:  m += 12; y -= 1
+                sel_year.set(y); sel_month.set(m)
+                import calendar
+                _, days_in = calendar.monthrange(y, m)
+                if sel_day.get() > days_in:
+                    sel_day.set(days_in)
+                nav_lbl.config(text=f"{y:04d}-{m:02d}")
+                build_calendar()
+                refresh_top()
+
+            def nav_year(delta):
+                sel_year.set(sel_year.get() + delta)
+                nav_month(0)
+
+            ttk.Button(nav, text="<<", width=3, command=lambda: nav_year(-1)).pack(side=tk.LEFT)
+            ttk.Button(nav, text="<",  width=3, command=lambda: nav_month(-1)).pack(side=tk.LEFT)
+            nav_lbl = ttk.Label(nav, text=f"{sel_year.get():04d}-{sel_month.get():02d}", width=9, anchor="center")
+            nav_lbl.pack(side=tk.LEFT)
+            ttk.Button(nav, text=">",  width=3, command=lambda: nav_month(1)).pack(side=tk.LEFT)
+            ttk.Button(nav, text=">>", width=3, command=lambda: nav_year(1)).pack(side=tk.LEFT)
+
+            build_calendar()
+
+            # ── 右侧：时间滚轮 ──────────────────────────────────────
+            time_frame = ttk.LabelFrame(body, text="时间")
+            time_frame.grid(row=0, column=1, sticky="n")
+
+            def make_scroll_col(parent, label, values, cur_var, col_idx):
+                ttk.Label(parent, text=label).grid(row=0, column=col_idx, padx=4)
+                lb = tk.Listbox(parent, width=4, height=7, exportselection=False,
+                                selectmode=tk.SINGLE, activestyle="none")
+                lb.grid(row=1, column=col_idx, padx=4)
+                for v in values:
+                    lb.insert(tk.END, v)
+                try:
+                    idx = values.index(cur_var.get())
+                except ValueError:
+                    idx = 0
+                lb.selection_set(idx)
+                lb.see(max(0, idx - 3))
+
+                def on_select(evt):
+                    sel = lb.curselection()
+                    if sel:
+                        cur_var.set(values[sel[0]])
+                        refresh_top()
+                lb.bind("<<ListboxSelect>>", on_select)
+
+                def on_wheel(evt):
+                    sel = lb.curselection()
+                    idx = sel[0] if sel else 0
+                    idx = max(0, min(len(values)-1, idx + (-1 if evt.delta > 0 else 1)))
+                    lb.selection_clear(0, tk.END)
+                    lb.selection_set(idx)
+                    lb.see(max(0, idx - 3))
+                    cur_var.set(values[idx])
+                    refresh_top()
+                lb.bind("<MouseWheel>", on_wheel)
+
+            hours   = [str(h).zfill(2) for h in range(24)]
+            minutes = [str(m).zfill(2) for m in range(60)]
+            seconds = [str(s).zfill(2) for s in range(60)]
+            make_scroll_col(time_frame, "时", hours,   sel_hour, 0)
+            make_scroll_col(time_frame, "分", minutes, sel_min,  1)
+            make_scroll_col(time_frame, "秒", seconds, sel_sec,  2)
+
+            # ── 底部按钮 ────────────────────────────────────────────
+            btn_frame = ttk.Frame(popup)
+            btn_frame.pack(pady=8)
+
+            def use_now():
+                n = datetime.now()
+                sel_year.set(n.year); sel_month.set(n.month); sel_day.set(n.day)
+                sel_hour.set(str(n.hour).zfill(2))
+                sel_min.set(str(n.minute).zfill(2))
+                sel_sec.set(str(n.second).zfill(2))
+                nav_lbl.config(text=f"{n.year:04d}-{n.month:02d}")
+                build_calendar()
+                refresh_top()
+
+            def confirm():
+                y_var.set(str(sel_year.get()))
+                mo_var.set(str(sel_month.get()).zfill(2))
+                d_var.set(str(sel_day.get()).zfill(2))
+                h_var.set(sel_hour.get())
+                mi_var.set(sel_min.get())
+                s_var.set(sel_sec.get())
+                display_lbl.config(text=_get_dt_from_vars(y_var, mo_var, d_var, h_var, mi_var, s_var))
+                popup.destroy()
+
+            ttk.Button(btn_frame, text="现在", command=use_now, width=8).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="确定", command=confirm, width=8).pack(side=tk.LEFT, padx=5)
+            ttk.Button(btn_frame, text="取消", command=popup.destroy, width=8).pack(side=tk.LEFT, padx=5)
+
+            # 居中
+            popup.update_idletasks()
+            pw, ph = popup.winfo_width(), popup.winfo_height()
+            sw, sh = popup.winfo_screenwidth(), popup.winfo_screenheight()
+            popup.geometry(f"+{(sw-pw)//2}+{(sh-ph)//2}")
+
+        # ── 开始日期时间 UI ─────────────────────────────────────────
+        ttk.Label(cycle_copy_params_frame, text="开始日期时间:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        start_date_frame = ttk.Frame(cycle_copy_params_frame)
+        start_date_frame.grid(row=2, column=1, columnspan=5, sticky=tk.W, pady=2)
+
+        start_display_lbl = ttk.Label(start_date_frame,
+            text=_get_dt_from_vars(start_year_var, start_month_var, start_day_var,
+                                   start_hour_var, start_minute_var, start_second_var),
+            relief="sunken", width=22, anchor="center")
+        start_display_lbl.pack(side=tk.LEFT, padx=2)
+        ttk.Button(start_date_frame, text="选择...", width=7,
+                   command=lambda: open_datetime_picker(
+                       "选择开始日期时间",
+                       start_year_var, start_month_var, start_day_var,
+                       start_hour_var, start_minute_var, start_second_var,
+                       start_display_lbl)).pack(side=tk.LEFT, padx=2)
 
         def set_start_now():
-            now = datetime.now()
-            start_year_var.set(str(now.year))
-            start_month_var.set(str(now.month).zfill(2))
-            start_day_var.set(str(now.day).zfill(2))
-            start_hour_var.set(str(now.hour).zfill(2))
-            start_minute_var.set(str(now.minute).zfill(2))
-            start_second_var.set(str(now.second).zfill(2))
+            _set_vars_from_dt(datetime.now(),
+                              start_year_var, start_month_var, start_day_var,
+                              start_hour_var, start_minute_var, start_second_var)
+            start_display_lbl.config(text=_get_dt_from_vars(
+                start_year_var, start_month_var, start_day_var,
+                start_hour_var, start_minute_var, start_second_var))
 
         ttk.Button(start_date_frame, text="现在", command=set_start_now, width=6).pack(side=tk.LEFT, padx=5)
 
@@ -2466,78 +2662,40 @@ class EChartsEditor:
         end_date_frame = ttk.Frame(cycle_copy_params_frame)
         end_date_frame.grid(row=4, column=1, columnspan=5, sticky=tk.W, pady=2)
 
-        end_tomorrow = now + timedelta(days=1)
-
-        ttk.Label(end_date_frame, text="年:").pack(side=tk.LEFT, padx=2)
-        end_year_var = tk.StringVar(value=str(end_tomorrow.year))
-        end_year_combo = ttk.Combobox(end_date_frame, textvariable=end_year_var, width=6, state='readonly')
-        end_year_combo['values'] = [str(y) for y in range(2020, 2031)]
-        end_year_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(end_year_combo)
-
-        ttk.Label(end_date_frame, text="月:").pack(side=tk.LEFT, padx=2)
-        end_month_var = tk.StringVar(value=str(end_tomorrow.month).zfill(2))
-        end_month_combo = ttk.Combobox(end_date_frame, textvariable=end_month_var, width=4, state='readonly')
-        end_month_combo['values'] = [str(m).zfill(2) for m in range(1, 13)]
-        end_month_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(end_month_combo)
-
-        ttk.Label(end_date_frame, text="日:").pack(side=tk.LEFT, padx=2)
-        end_day_var = tk.StringVar(value=str(end_tomorrow.day).zfill(2))
-        end_day_combo = ttk.Combobox(end_date_frame, textvariable=end_day_var, width=4, state='readonly')
-        end_day_combo['values'] = [str(d).zfill(2) for d in range(1, 32)]
-        end_day_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(end_day_combo)
-
-        ttk.Label(end_date_frame, text="时:").pack(side=tk.LEFT, padx=2)
-        end_hour_var = tk.StringVar(value=str(end_tomorrow.hour).zfill(2))
-        end_hour_combo = ttk.Combobox(end_date_frame, textvariable=end_hour_var, width=4, state='readonly')
-        end_hour_combo['values'] = [str(h).zfill(2) for h in range(0, 24)]
-        end_hour_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(end_hour_combo)
-
-        ttk.Label(end_date_frame, text="分:").pack(side=tk.LEFT, padx=2)
-        end_minute_var = tk.StringVar(value=str(end_tomorrow.minute).zfill(2))
-        end_minute_combo = ttk.Combobox(end_date_frame, textvariable=end_minute_var, width=4, state='readonly')
-        end_minute_combo['values'] = [str(m).zfill(2) for m in range(0, 60)]
-        end_minute_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(end_minute_combo)
-
-        ttk.Label(end_date_frame, text="秒:").pack(side=tk.LEFT, padx=2)
-        end_second_var = tk.StringVar(value=str(end_tomorrow.second).zfill(2))
-        end_second_combo = ttk.Combobox(end_date_frame, textvariable=end_second_var, width=4, state='readonly')
-        end_second_combo['values'] = [str(s).zfill(2) for s in range(0, 60)]
-        end_second_combo.pack(side=tk.LEFT, padx=2)
-        ttk.Label(end_date_frame, text="秒:").pack(side=tk.LEFT, padx=2)
-        end_second_var = tk.StringVar(value=str(end_tomorrow.second).zfill(2))
-        end_second_combo = ttk.Combobox(end_date_frame, textvariable=end_second_var, width=4, state='readonly')
-        end_second_combo['values'] = [str(s).zfill(2) for s in range(0, 60)]
-        end_second_combo.pack(side=tk.LEFT, padx=2)
-        disable_mousewheel(end_second_combo)
+        end_display_lbl = ttk.Label(end_date_frame,
+            text=_get_dt_from_vars(end_year_var, end_month_var, end_day_var,
+                                   end_hour_var, end_minute_var, end_second_var),
+            relief="sunken", width=22, anchor="center")
+        end_display_lbl.pack(side=tk.LEFT, padx=2)
+        ttk.Button(end_date_frame, text="选择...", width=7,
+                   command=lambda: open_datetime_picker(
+                       "选择结束日期时间",
+                       end_year_var, end_month_var, end_day_var,
+                       end_hour_var, end_minute_var, end_second_var,
+                       end_display_lbl)).pack(side=tk.LEFT, padx=2)
 
         # 自动计算结束时间按钮
+        def _refresh_labels():
+            start_display_lbl.config(text=_get_dt_from_vars(
+                start_year_var, start_month_var, start_day_var,
+                start_hour_var, start_minute_var, start_second_var))
+            end_display_lbl.config(text=_get_dt_from_vars(
+                end_year_var, end_month_var, end_day_var,
+                end_hour_var, end_minute_var, end_second_var))
+
         def calc_end_time():
             try:
                 start_dt = datetime(
-                    int(start_year_var.get()),
-                    int(start_month_var.get()),
-                    int(start_day_var.get()),
-                    int(start_hour_var.get()),
-                    int(start_minute_var.get()),
-                    int(start_second_var.get())
+                    int(start_year_var.get()), int(start_month_var.get()),
+                    int(start_day_var.get()),  int(start_hour_var.get()),
+                    int(start_minute_var.get()), int(start_second_var.get())
                 )
-
-                days = int(time_span_days_entry.get())
-                hours = int(time_span_hours_entry.get())
-
-                end_dt = start_dt + timedelta(days=days, hours=hours)
-
-                end_year_var.set(str(end_dt.year))
-                end_month_var.set(str(end_dt.month).zfill(2))
-                end_day_var.set(str(end_dt.day).zfill(2))
-                end_hour_var.set(str(end_dt.hour).zfill(2))
-                end_minute_var.set(str(end_dt.minute).zfill(2))
-                end_second_var.set(str(end_dt.second).zfill(2))
+                end_dt = start_dt + timedelta(
+                    days=int(time_span_days_entry.get()),
+                    hours=int(time_span_hours_entry.get()))
+                _set_vars_from_dt(end_dt, end_year_var, end_month_var, end_day_var,
+                                  end_hour_var, end_minute_var, end_second_var)
+                _refresh_labels()
             except Exception as e:
                 messagebox.showerror("错误", f"计算失败：{str(e)}", parent=op_window)
 
@@ -2545,38 +2703,20 @@ class EChartsEditor:
 
         # 快捷预设按钮
         def set_preset_24h():
-            now = datetime.now()
-            start_year_var.set(str(now.year))
-            start_month_var.set(str(now.month).zfill(2))
-            start_day_var.set(str(now.day).zfill(2))
-            start_hour_var.set(str(now.hour).zfill(2))
-            start_minute_var.set(str(now.minute).zfill(2))
-            start_second_var.set(str(now.second).zfill(2))
-
-            end = now + timedelta(days=1)
-            end_year_var.set(str(end.year))
-            end_month_var.set(str(end.month).zfill(2))
-            end_day_var.set(str(end.day).zfill(2))
-            end_hour_var.set(str(end.hour).zfill(2))
-            end_minute_var.set(str(end.minute).zfill(2))
-            end_second_var.set(str(end.second).zfill(2))
+            n = datetime.now()
+            _set_vars_from_dt(n, start_year_var, start_month_var, start_day_var,
+                              start_hour_var, start_minute_var, start_second_var)
+            _set_vars_from_dt(n + timedelta(days=1), end_year_var, end_month_var, end_day_var,
+                              end_hour_var, end_minute_var, end_second_var)
+            _refresh_labels()
 
         def set_preset_7d():
-            now = datetime.now()
-            start_year_var.set(str(now.year))
-            start_month_var.set(str(now.month).zfill(2))
-            start_day_var.set(str(now.day).zfill(2))
-            start_hour_var.set(str(now.hour).zfill(2))
-            start_minute_var.set(str(now.minute).zfill(2))
-            start_second_var.set(str(now.second).zfill(2))
-
-            end = now + timedelta(days=7)
-            end_year_var.set(str(end.year))
-            end_month_var.set(str(end.month).zfill(2))
-            end_day_var.set(str(end.day).zfill(2))
-            end_hour_var.set(str(end.hour).zfill(2))
-            end_minute_var.set(str(end.minute).zfill(2))
-            end_second_var.set(str(end.second).zfill(2))
+            n = datetime.now()
+            _set_vars_from_dt(n, start_year_var, start_month_var, start_day_var,
+                              start_hour_var, start_minute_var, start_second_var)
+            _set_vars_from_dt(n + timedelta(days=7), end_year_var, end_month_var, end_day_var,
+                              end_hour_var, end_minute_var, end_second_var)
+            _refresh_labels()
 
         preset_frame = ttk.Frame(cycle_copy_params_frame)
         preset_frame.grid(row=5, column=0, columnspan=6, pady=5)
@@ -2596,7 +2736,7 @@ class EChartsEditor:
         cycle_copy_custom_rate_entry.insert(0, "0")
         ttk.Label(cycle_copy_params_frame, text="（点/秒，0=使用源数据采样率，>0则先降采样求平均值）", foreground='gray').grid(row=7, column=2, columnspan=4, sticky=tk.W, pady=2)
 
-        ttk.Label(cycle_copy_params_frame, text="（提示：点击下拉框选择日期时间，或使用快捷预设按钮）", foreground='blue').grid(row=8, column=0, columnspan=6, sticky=tk.W, pady=2)
+        ttk.Label(cycle_copy_params_frame, text='（提示：点击"选择..."按钮打开日历选择日期时间，或使用快捷预设按钮）', foreground='blue').grid(row=8, column=0, columnspan=6, sticky=tk.W, pady=2)
 
         # 8. Y轴范围设置
         yaxis_range_frame = ttk.Frame(options_frame)
@@ -2949,12 +3089,8 @@ class EChartsEditor:
             start_datetime_str = restore_params.get('cycle_copy_start_datetime', '2025-01-01 00:00:00')
             try:
                 start_dt = datetime.strptime(start_datetime_str, "%Y-%m-%d %H:%M:%S")
-                start_year_var.set(str(start_dt.year))
-                start_month_var.set(str(start_dt.month).zfill(2))
-                start_day_var.set(str(start_dt.day).zfill(2))
-                start_hour_var.set(str(start_dt.hour).zfill(2))
-                start_minute_var.set(str(start_dt.minute).zfill(2))
-                start_second_var.set(str(start_dt.second).zfill(2))
+                _set_vars_from_dt(start_dt, start_year_var, start_month_var, start_day_var,
+                                  start_hour_var, start_minute_var, start_second_var)
             except:
                 pass
 
@@ -2962,14 +3098,11 @@ class EChartsEditor:
             end_datetime_str = restore_params.get('cycle_copy_end_datetime', '2025-01-02 00:00:00')
             try:
                 end_dt = datetime.strptime(end_datetime_str, "%Y-%m-%d %H:%M:%S")
-                end_year_var.set(str(end_dt.year))
-                end_month_var.set(str(end_dt.month).zfill(2))
-                end_day_var.set(str(end_dt.day).zfill(2))
-                end_hour_var.set(str(end_dt.hour).zfill(2))
-                end_minute_var.set(str(end_dt.minute).zfill(2))
-                end_second_var.set(str(end_dt.second).zfill(2))
+                _set_vars_from_dt(end_dt, end_year_var, end_month_var, end_day_var,
+                                  end_hour_var, end_minute_var, end_second_var)
             except:
                 pass
+            _refresh_labels()
 
             cycle_copy_max_points_entry.delete(0, tk.END)
             cycle_copy_max_points_entry.insert(0, restore_params.get('cycle_copy_max_points', '100000'))
@@ -4768,8 +4901,415 @@ class EChartsEditor:
         # 直接打开全局操作窗口，并传入上次的参数
         self.global_operations(restore_params=self.last_operation_params)
 
-    def batch_generate(self):
+    def _get_batch_config_file(self, mode_key):
+        return os.path.join(os.path.dirname(__file__), f'batch_generate_{mode_key}_config.json')
+
+    def _load_batch_params(self, mode_key):
+        config_file = self._get_batch_config_file(mode_key)
+        legacy_config_file = os.path.join(os.path.dirname(__file__), 'batch_generate_config.json')
+        saved_params = {}
+        load_config_file = config_file if os.path.exists(config_file) else legacy_config_file
+        if os.path.exists(load_config_file):
+            try:
+                with open(load_config_file, 'r', encoding='utf-8') as f:
+                    saved_params = json.load(f)
+            except:
+                pass
+        saved_params.pop('output_dir', None)
+        return saved_params
+
+    def _save_batch_params(self, mode_key, params_to_save):
+        try:
+            with open(self._get_batch_config_file(mode_key), 'w', encoding='utf-8') as f:
+                json.dump(params_to_save, f, ensure_ascii=False, indent=2)
+        except:
+            pass
+
+    def _remove_batch_params(self, mode_key):
+        config_file = self._get_batch_config_file(mode_key)
+        if os.path.exists(config_file):
+            try:
+                os.remove(config_file)
+            except:
+                pass
+
+    def _get_upload_parent_dir(self, file_path):
+        upload_dir = os.path.dirname(file_path)
+        parent_dir = os.path.dirname(upload_dir)
+        return parent_dir if parent_dir else upload_dir
+
+    def _collect_batch_params(self, widgets):
+        count_entry = widgets['count_entry']
+        range_start_entry = widgets['range_start_entry']
+        range_end_entry = widgets['range_end_entry']
+        data_type_var = widgets['data_type_var']
+        fluctuation_type_var = widgets['fluctuation_type_var']
+        fluctuation_mode_var = widgets['fluctuation_mode_var']
+        fluctuation_entry = widgets['fluctuation_entry']
+        output_dir_entry = widgets['output_dir_entry']
+        prefix_entry = widgets['prefix_entry']
+        sample_rate_entry = widgets['sample_rate_entry']
+        jump_ratio_entry = widgets['jump_ratio_entry']
+        max_limit_entry = widgets['max_limit_entry']
+        peak_clip_enabled_var = widgets['peak_clip_enabled_var']
+        peak_threshold_entry = widgets['peak_threshold_entry']
+        peak_min_duration_entry = widgets['peak_min_duration_entry']
+        zero_handling_var = widgets['zero_handling_var']
+        power_cycle_count_var = widgets['power_cycle_count_var']
+        smooth_enabled_var = widgets['smooth_enabled_var']
+        smooth_window_entry = widgets['smooth_window_entry']
+        smooth_custom_range_var = widgets['smooth_custom_range_var']
+        smooth_custom_min_entry = widgets['smooth_custom_min_entry']
+        smooth_custom_max_entry = widgets['smooth_custom_max_entry']
+
+        fluctuation_type = fluctuation_type_var.get()
+        smooth_enabled = smooth_enabled_var.get()
+        smooth_custom_range_enabled = smooth_custom_range_var.get() and smooth_enabled
+        smooth_custom_min_str = smooth_custom_min_entry.get().strip()
+        smooth_custom_max_str = smooth_custom_max_entry.get().strip()
+        peak_min_duration_str = peak_min_duration_entry.get().strip()
+        max_limit_str = max_limit_entry.get().strip()
+        peak_threshold_str = peak_threshold_entry.get().strip()
+
+        params = {
+            'count': int(count_entry.get()),
+            'range_start': int(range_start_entry.get()) - 1,
+            'range_end': int(range_end_entry.get()) - 1,
+            'data_type': data_type_var.get(),
+            'fluctuation_type': fluctuation_type,
+            'fluctuation_mode': fluctuation_mode_var.get(),
+            'fluctuation_value': float(fluctuation_entry.get()),
+            'output_dir': output_dir_entry.get().strip(),
+            'prefix': prefix_entry.get().strip(),
+            'sample_rate': int(sample_rate_entry.get()),
+            'jump_ratio': float(jump_ratio_entry.get()) if fluctuation_type == 'jump' else 0,
+            'max_limit': float(max_limit_str) if max_limit_str else None,
+            'peak_clip_enabled': peak_clip_enabled_var.get(),
+            'peak_threshold': float(peak_threshold_str) if peak_threshold_str else None,
+            'peak_min_duration': int(peak_min_duration_str) if peak_min_duration_str else None,
+            'zero_handling': zero_handling_var.get(),
+            'power_cycle_count': power_cycle_count_var.get(),
+            'smooth_enabled': smooth_enabled,
+            'smooth_window': int(smooth_window_entry.get()) if smooth_enabled else 1,
+            'smooth_custom_range_enabled': smooth_custom_range_enabled,
+            'smooth_custom_min': float(smooth_custom_min_str) if smooth_custom_range_enabled and smooth_custom_min_str else None,
+            'smooth_custom_max': float(smooth_custom_max_str) if smooth_custom_range_enabled and smooth_custom_max_str else None,
+        }
+        params['params_to_save'] = {
+            'count': count_entry.get(),
+            'range_start': range_start_entry.get(),
+            'range_end': range_end_entry.get(),
+            'data_type': params['data_type'],
+            'fluctuation_type': params['fluctuation_type'],
+            'fluctuation_mode': params['fluctuation_mode'],
+            'fluctuation_value': fluctuation_entry.get(),
+            'jump_ratio': jump_ratio_entry.get(),
+            'max_limit': max_limit_entry.get(),
+            'output_dir': params['output_dir'],
+            'sample_rate': sample_rate_entry.get(),
+            'peak_clip_enabled': params['peak_clip_enabled'],
+            'peak_threshold': peak_threshold_entry.get(),
+            'peak_min_duration': peak_min_duration_entry.get(),
+            'zero_handling': params['zero_handling'],
+            'power_cycle_count': params['power_cycle_count'],
+            'smooth_enabled': params['smooth_enabled'],
+            'smooth_window': smooth_window_entry.get(),
+            'smooth_custom_range_enabled': smooth_custom_range_var.get(),
+            'smooth_custom_min': smooth_custom_min_entry.get(),
+            'smooth_custom_max': smooth_custom_max_entry.get(),
+            'remember': True
+        }
+        return params
+
+    def _validate_batch_params(self, params, parent, mode_label=''):
+        label_prefix = f'{mode_label}?' if mode_label else ''
+        if params['peak_min_duration'] is not None and params['peak_min_duration'] < 1:
+            messagebox.showerror('??', f'{label_prefix}????????????1?', parent=parent)
+            return False
+        if params['count'] <= 0 or params['count'] > 1000:
+            messagebox.showerror('??', f'{label_prefix}???????1-1000???', parent=parent)
+            return False
+        if params['range_start'] < 0 or params['range_end'] < params['range_start']:
+            messagebox.showerror('??', f'{label_prefix}???????', parent=parent)
+            return False
+        if not params['output_dir'] or not os.path.exists(params['output_dir']):
+            messagebox.showerror('??', f'{label_prefix}????????', parent=parent)
+            return False
+        if not params['prefix']:
+            messagebox.showerror('??', f'{label_prefix}?????????', parent=parent)
+            return False
+        if params['sample_rate'] < 1:
+            messagebox.showerror('??', f'{label_prefix}?????????1?', parent=parent)
+            return False
+        if params['smooth_enabled'] and params['smooth_window'] < 2:
+            messagebox.showerror('??', f'{label_prefix}????????????2?', parent=parent)
+            return False
+        if params['smooth_custom_range_enabled']:
+            if params['smooth_custom_min'] is None or params['smooth_custom_max'] is None:
+                messagebox.showerror('??', f'{label_prefix}?????????????????????????', parent=parent)
+                return False
+            if params['smooth_custom_min'] >= params['smooth_custom_max']:
+                messagebox.showerror('??', f'{label_prefix}????????????????????', parent=parent)
+                return False
+        return True
+
+    def _execute_batch_with_params(self, template_file, params):
+        return self._run_batch_generate(
+            template_file, params['count'], params['range_start'], params['range_end'],
+            params['data_type'], params['fluctuation_type'], params['fluctuation_mode'],
+            params['fluctuation_value'], params['output_dir'], params['prefix'],
+            params['sample_rate'], params['jump_ratio'], params['max_limit'],
+            params['peak_clip_enabled'], params['peak_threshold'], params['peak_min_duration'],
+            params['zero_handling'], params['power_cycle_count'], params['smooth_enabled'],
+            params['smooth_window'], params['smooth_custom_range_enabled'],
+            params['smooth_custom_min'], params['smooth_custom_max']
+        )
+
+    def one_click_batch_generate(self):
+        """One-click batch generate work and sleep modes."""
+        c = lambda s: s.encode('ascii').decode('unicode_escape') if all(ord(ch) < 128 for ch in s) else s.replace('\\\\n', '\\n')
+        if len(self.html_files) < 2:
+            messagebox.showwarning(c("\u8b66\u544a"), c("\u8bf7\u5148\u4e0a\u4f202\u4e2aHTML\u6587\u4ef6\uff1a\u4e0d\u5e26-L\u7684\u662f\u5de5\u4f5c\u6a21\u5f0f\uff0c\u5e26-L\u7684\u662f\u4f11\u7720\u6a21\u5f0f\uff01"))
+            return
+
+        def is_sleep_file(file_info):
+            name = os.path.splitext(file_info.get('name', os.path.basename(file_info.get('path', ''))))[0]
+            return '-l' in name.lower()
+
+        work_file = next((file_info for file_info in self.html_files if not is_sleep_file(file_info)), None)
+        sleep_file = next((file_info for file_info in self.html_files if is_sleep_file(file_info)), None)
+
+        if not work_file or not sleep_file:
+            messagebox.showwarning(
+                c("\u8b66\u544a"),
+                c("\u672a\u80fd\u81ea\u52a8\u8bc6\u522b\u5de5\u4f5c/\u4f11\u7720\u6587\u4ef6\uff01\\n\\n\u5de5\u4f5c\u6a21\u5f0f\uff1a\u6587\u4ef6\u540d\u4e0d\u5e26-L\\n\u4f11\u7720\u6a21\u5f0f\uff1a\u6587\u4ef6\u540d\u5e26-L"),
+            )
+            return
+
+        work_params = self._load_batch_params('work')
+        sleep_params = self._load_batch_params('sleep')
+
+        one_key_window = tk.Toplevel(self.root)
+        one_key_window.title(c("\u4e00\u952e\u6279\u751f\u6210"))
+        one_key_window.geometry("900x520")
+        one_key_window.minsize(850, 480)
+
+        btn_frame = ttk.Frame(one_key_window)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+
+        main_frame = ttk.Frame(one_key_window)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(title_frame, text=c("\u4e00\u952e\u6279\u751f\u6210"), font=('Arial', 14, 'bold')).pack()
+        ttk.Label(title_frame, text=c("\u5de5\u4f5c\u6a21\u5f0f\u6a21\u677f\uff1a") + f"{work_file['name']}" + c("\uff08\u4e0d\u5e26-L\uff09"), foreground='blue').pack(anchor=tk.W)
+        ttk.Label(title_frame, text=c("\u4f11\u7720\u6a21\u5f0f\u6a21\u677f\uff1a") + f"{sleep_file['name']}" + c("\uff08\u5e26-L\uff09"), foreground='blue').pack(anchor=tk.W)
+
+        notebook = ttk.Notebook(main_frame)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        def create_mode_page(parent, mode_label, saved_params, template_file):
+            frame = ttk.Frame(parent, padding=10)
+
+            ttk.Label(frame, text=c("\u751f\u6210\u6570\u91cf:")).grid(row=0, column=0, sticky=tk.W, pady=5)
+            count_entry = ttk.Entry(frame, width=12)
+            count_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+            count_entry.insert(0, saved_params.get('count', '6'))
+
+            ttk.Label(frame, text=c("\u6ce2\u52a8\u8303\u56f4:")).grid(row=1, column=0, sticky=tk.W, pady=5)
+            range_start_entry = ttk.Entry(frame, width=10)
+            range_start_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+            range_start_entry.insert(0, saved_params.get('range_start', '1'))
+            ttk.Label(frame, text=c("\u5230")).grid(row=1, column=2, padx=2)
+            range_end_entry = ttk.Entry(frame, width=10)
+            range_end_entry.grid(row=1, column=3, padx=5, pady=5, sticky=tk.W)
+            if 'range_end' in saved_params:
+                range_end_entry.insert(0, saved_params['range_end'])
+            elif template_file.get('series'):
+                range_end_entry.insert(0, str(max(len(s['data']) for s in template_file['series'])))
+            else:
+                range_end_entry.insert(0, '100')
+
+            def fill_all_range():
+                if template_file.get('series'):
+                    max_len = max(len(s['data']) for s in template_file['series'])
+                    range_start_entry.delete(0, tk.END)
+                    range_start_entry.insert(0, '1')
+                    range_end_entry.delete(0, tk.END)
+                    range_end_entry.insert(0, str(max_len))
+
+            ttk.Button(frame, text=c("\u5168\u90e8"), command=fill_all_range, width=6).grid(row=1, column=4, padx=2)
+
+            data_type_var = tk.StringVar(value=saved_params.get('data_type', 'current'))
+            ttk.Label(frame, text=c("\u6ce2\u52a8\u5bf9\u8c61:")).grid(row=2, column=0, sticky=tk.W, pady=5)
+            ttk.Radiobutton(frame, text=c("\u7535\u6d41"), variable=data_type_var, value="current").grid(row=2, column=1, sticky=tk.W)
+            ttk.Radiobutton(frame, text=c("\u7535\u538b"), variable=data_type_var, value="voltage").grid(row=2, column=2, sticky=tk.W)
+            ttk.Radiobutton(frame, text=c("\u7535\u538b\u548c\u7535\u6d41"), variable=data_type_var, value="both").grid(row=2, column=3, sticky=tk.W, columnspan=2)
+
+            fluctuation_type_var = tk.StringVar(value=saved_params.get('fluctuation_type', 'jump'))
+            ttk.Label(frame, text=c("\u6ce2\u52a8\u7c7b\u578b:")).grid(row=3, column=0, sticky=tk.W, pady=5)
+            ttk.Radiobutton(frame, text=c("\u968f\u673a\u6ce2\u52a8"), variable=fluctuation_type_var, value="percent").grid(row=3, column=1, sticky=tk.W)
+            ttk.Radiobutton(frame, text=c("\u8df3\u8dc3\u6ce2\u52a8"), variable=fluctuation_type_var, value="jump").grid(row=3, column=2, sticky=tk.W)
+            ttk.Radiobutton(frame, text=c("\u56fa\u5b9a\u52a0\u51cf"), variable=fluctuation_type_var, value="fixed").grid(row=3, column=3, sticky=tk.W)
+
+            ttk.Label(frame, text=c("\u8df3\u8dc3\u6bd4\u4f8b(%):")).grid(row=4, column=0, sticky=tk.W, pady=5)
+            jump_ratio_entry = ttk.Entry(frame, width=12)
+            jump_ratio_entry.grid(row=4, column=1, padx=5, pady=5, sticky=tk.W)
+            jump_ratio_entry.insert(0, saved_params.get('jump_ratio', '20'))
+
+            ttk.Label(frame, text=c("\u6ce2\u52a8\u4e0a\u9650:")).grid(row=4, column=2, sticky=tk.W, pady=5)
+            max_limit_entry = ttk.Entry(frame, width=12)
+            max_limit_entry.grid(row=4, column=3, padx=5, pady=5, sticky=tk.W)
+            max_limit_entry.insert(0, saved_params.get('max_limit', ''))
+
+            fluctuation_mode_var = tk.StringVar(value=saved_params.get('fluctuation_mode', 'independent'))
+            ttk.Label(frame, text=c("\u6ce2\u52a8\u6a21\u5f0f:")).grid(row=5, column=0, sticky=tk.W, pady=5)
+            ttk.Radiobutton(frame, text=c("\u6574\u4f53\u504f\u79fb"), variable=fluctuation_mode_var, value="overall").grid(row=5, column=1, sticky=tk.W)
+            ttk.Radiobutton(frame, text=c("\u6bcf\u70b9\u72ec\u7acb"), variable=fluctuation_mode_var, value="independent").grid(row=5, column=2, sticky=tk.W)
+
+            ttk.Label(frame, text=c("\u6ce2\u52a8\u5e45\u5ea6:")).grid(row=6, column=0, sticky=tk.W, pady=5)
+            fluctuation_entry = ttk.Entry(frame, width=12)
+            fluctuation_entry.grid(row=6, column=1, padx=5, pady=5, sticky=tk.W)
+            fluctuation_entry.insert(0, saved_params.get('fluctuation_value', '30'))
+            ttk.Label(frame, text=c("5=\u00b15%\uff1b\u56fa\u5b9a\u52a0\u51cf\u65f60.1=+0.1"), foreground='gray').grid(row=6, column=2, sticky=tk.W, columnspan=3)
+
+            ttk.Label(frame, text=c("\u8f93\u51fa\u76ee\u5f55:")).grid(row=7, column=0, sticky=tk.W, pady=5)
+            output_dir_entry = ttk.Entry(frame, width=48)
+            output_dir_entry.grid(row=7, column=1, padx=5, pady=5, columnspan=3, sticky=tk.W)
+            output_dir_entry.insert(0, self._get_upload_parent_dir(template_file['path']))
+
+            def browse_output_dir():
+                directory = filedialog.askdirectory(title=c("\u9009\u62e9") + mode_label + c("\u8f93\u51fa\u76ee\u5f55"), parent=one_key_window)
+                if directory:
+                    output_dir_entry.delete(0, tk.END)
+                    output_dir_entry.insert(0, directory)
+
+            ttk.Button(frame, text=c("\u6d4f\u89c8"), command=browse_output_dir, width=8).grid(row=7, column=4, padx=2)
+
+            ttk.Label(frame, text=c("\u6587\u4ef6\u540d\u524d\u7f00:")).grid(row=8, column=0, sticky=tk.W, pady=5)
+            prefix_entry = ttk.Entry(frame, width=30)
+            prefix_entry.grid(row=8, column=1, padx=5, pady=5, columnspan=2, sticky=tk.W)
+            prefix_entry.insert(0, os.path.splitext(template_file['name'])[0])
+
+            ttk.Label(frame, text=c("\u8f93\u51fa\u91c7\u6837\u7387:")).grid(row=9, column=0, sticky=tk.W, pady=5)
+            sample_rate_entry = ttk.Entry(frame, width=12)
+            sample_rate_entry.grid(row=9, column=1, padx=5, pady=5, sticky=tk.W)
+            sample_rate_entry.insert(0, saved_params.get('sample_rate', '1'))
+
+            peak_clip_enabled_var = tk.BooleanVar(value=saved_params.get('peak_clip_enabled', False))
+            ttk.Checkbutton(frame, text=c("\u6279\u524a\u5cf0"), variable=peak_clip_enabled_var).grid(row=10, column=0, sticky=tk.W, pady=5)
+            ttk.Label(frame, text=c("\u5cf0\u503c\u9608\u503c:")).grid(row=10, column=1, sticky=tk.W, pady=5)
+            peak_threshold_entry = ttk.Entry(frame, width=12)
+            peak_threshold_entry.grid(row=10, column=2, padx=5, pady=5, sticky=tk.W)
+            peak_threshold_entry.insert(0, saved_params.get('peak_threshold', ''))
+            ttk.Label(frame, text=c("\u6700\u77ed\u6301\u7eed\u70b9\u6570:")).grid(row=10, column=3, sticky=tk.W, pady=5)
+            peak_min_duration_entry = ttk.Entry(frame, width=10)
+            peak_min_duration_entry.grid(row=10, column=4, padx=5, pady=5, sticky=tk.W)
+            peak_min_duration_entry.insert(0, saved_params.get('peak_min_duration', ''))
+
+            zero_handling_var = tk.StringVar(value=saved_params.get('zero_handling', 'default'))
+            ttk.Label(frame, text=c("0\u503c\u5904\u7406:")).grid(row=11, column=0, sticky=tk.W, pady=5)
+            ttk.Radiobutton(frame, text=c("\u8df3\u8fc70\u503c"), variable=zero_handling_var, value="default").grid(row=11, column=1, sticky=tk.W)
+            ttk.Radiobutton(frame, text=c("\u66ff\u6362\u4e3anull"), variable=zero_handling_var, value="to_null").grid(row=11, column=2, sticky=tk.W)
+            ttk.Radiobutton(frame, text=c("\u4f5c\u4e3a\u5b9e\u9645\u6570\u636e"), variable=zero_handling_var, value="as_data").grid(row=11, column=3, sticky=tk.W)
+
+            power_cycle_count_var = tk.BooleanVar(value=saved_params.get('power_cycle_count', False))
+            ttk.Checkbutton(frame, text=c("\u751f\u6210\u5f00\u5173\u673a\u6b21\u6570\u7edf\u8ba1"), variable=power_cycle_count_var).grid(row=12, column=0, columnspan=3, sticky=tk.W, pady=5)
+
+            smooth_enabled_var = tk.BooleanVar(value=saved_params.get('smooth_enabled', False))
+            ttk.Checkbutton(frame, text=c("\u5e73\u6ed1\u8f93\u51fa"), variable=smooth_enabled_var).grid(row=13, column=0, sticky=tk.W, pady=5)
+            ttk.Label(frame, text=c("\u7a97\u53e3\u5927\u5c0f:")).grid(row=13, column=1, sticky=tk.W, pady=5)
+            smooth_window_entry = ttk.Entry(frame, width=12)
+            smooth_window_entry.grid(row=13, column=2, padx=5, pady=5, sticky=tk.W)
+            smooth_window_entry.insert(0, saved_params.get('smooth_window', '5'))
+
+            smooth_custom_range_var = tk.BooleanVar(value=saved_params.get('smooth_custom_range_enabled', False))
+            ttk.Checkbutton(frame, text=c("\u81ea\u5b9a\u4e49\u5f02\u5e38\u503c\u8303\u56f4"), variable=smooth_custom_range_var).grid(row=14, column=0, columnspan=2, sticky=tk.W, pady=5)
+            ttk.Label(frame, text=c("\u6700\u5c0f\u503c:")).grid(row=14, column=2, sticky=tk.W, pady=5)
+            smooth_custom_min_entry = ttk.Entry(frame, width=10)
+            smooth_custom_min_entry.grid(row=14, column=3, padx=5, pady=5, sticky=tk.W)
+            smooth_custom_min_entry.insert(0, saved_params.get('smooth_custom_min', ''))
+            ttk.Label(frame, text=c("\u6700\u5927\u503c:")).grid(row=14, column=4, sticky=tk.W, pady=5)
+            smooth_custom_max_entry = ttk.Entry(frame, width=10)
+            smooth_custom_max_entry.grid(row=14, column=5, padx=5, pady=5, sticky=tk.W)
+            smooth_custom_max_entry.insert(0, saved_params.get('smooth_custom_max', ''))
+
+            remember_params_var = tk.BooleanVar(value=saved_params.get('remember', True))
+            ttk.Checkbutton(frame, text=c("\u8bb0\u4f4f\u8fd9\u7ec4\u53c2\u6570"), variable=remember_params_var).grid(row=15, column=0, columnspan=3, sticky=tk.W, pady=10)
+
+            return frame, {
+                'count_entry': count_entry, 'range_start_entry': range_start_entry, 'range_end_entry': range_end_entry,
+                'data_type_var': data_type_var, 'fluctuation_type_var': fluctuation_type_var,
+                'fluctuation_mode_var': fluctuation_mode_var, 'fluctuation_entry': fluctuation_entry,
+                'output_dir_entry': output_dir_entry, 'prefix_entry': prefix_entry, 'sample_rate_entry': sample_rate_entry,
+                'jump_ratio_entry': jump_ratio_entry, 'max_limit_entry': max_limit_entry,
+                'peak_clip_enabled_var': peak_clip_enabled_var, 'peak_threshold_entry': peak_threshold_entry,
+                'peak_min_duration_entry': peak_min_duration_entry, 'zero_handling_var': zero_handling_var,
+                'power_cycle_count_var': power_cycle_count_var, 'smooth_enabled_var': smooth_enabled_var,
+                'smooth_window_entry': smooth_window_entry, 'smooth_custom_range_var': smooth_custom_range_var,
+                'smooth_custom_min_entry': smooth_custom_min_entry, 'smooth_custom_max_entry': smooth_custom_max_entry,
+                'remember_params_var': remember_params_var
+            }
+
+        work_label = c("\u5de5\u4f5c\u6a21\u5f0f")
+        sleep_label = c("\u4f11\u7720\u6a21\u5f0f")
+        work_page, work_widgets = create_mode_page(notebook, work_label, work_params, work_file)
+        sleep_page, sleep_widgets = create_mode_page(notebook, sleep_label, sleep_params, sleep_file)
+        notebook.add(work_page, text=c("\u5de5\u4f5c\u6a21\u5f0f\u53c2\u6570"))
+        notebook.add(sleep_page, text=c("\u4f11\u7720\u6a21\u5f0f\u53c2\u6570"))
+
+        def start_one_click_generate():
+            try:
+                work_collected = self._collect_batch_params(work_widgets)
+                sleep_collected = self._collect_batch_params(sleep_widgets)
+                if not self._validate_batch_params(work_collected, one_key_window, work_label):
+                    return
+                if not self._validate_batch_params(sleep_collected, one_key_window, sleep_label):
+                    return
+
+                total = work_collected['count'] + sleep_collected['count']
+                confirm_msg = (
+                    c("\u5c06\u4e00\u952e\u751f\u6210 ") + f"{total}" + c(" \u4e2aHTML\u6587\u4ef6\uff1a\\n\\n") +
+                    work_label + c("\uff1a") + f"{work_collected['count']}" + c(" \u4e2a -> ") + work_collected['output_dir'] + "\\n" +
+                    sleep_label + c("\uff1a") + f"{sleep_collected['count']}" + c(" \u4e2a -> ") + sleep_collected['output_dir'] + c("\\n\\n\u786e\u5b9a\u7ee7\u7eed\u5417\uff1f")
+                )
+                if not messagebox.askyesno(c("\u786e\u8ba4"), confirm_msg, parent=one_key_window):
+                    return
+
+                if work_widgets['remember_params_var'].get():
+                    self._save_batch_params('work', work_collected['params_to_save'])
+                else:
+                    self._remove_batch_params('work')
+                if sleep_widgets['remember_params_var'].get():
+                    self._save_batch_params('sleep', sleep_collected['params_to_save'])
+                else:
+                    self._remove_batch_params('sleep')
+
+                work_count = self._execute_batch_with_params(work_file, work_collected)
+                sleep_count = self._execute_batch_with_params(sleep_file, sleep_collected)
+                one_key_window.destroy()
+                messagebox.showinfo(
+                    c("\u6210\u529f"),
+                    c("\u4e00\u952e\u6279\u751f\u6210\u5b8c\u6210\uff01\\n\\n") + work_label + c("\uff1a") + f"{work_count}" + c(" \u4e2a\\n") + sleep_label + c("\uff1a") + f"{sleep_count}" + c(" \u4e2a")
+                )
+            except ValueError as e:
+                messagebox.showerror(c("\u9519\u8bef"), c("\u53c2\u6570\u683c\u5f0f\u9519\u8bef\uff1a") + str(e), parent=one_key_window)
+            except Exception as e:
+                messagebox.showerror(c("\u9519\u8bef"), c("\u4e00\u952e\u6279\u751f\u6210\u5931\u8d25\uff1a") + str(e), parent=one_key_window)
+
+        ttk.Button(btn_frame, text=c("\u5f00\u59cb\u4e00\u952e\u751f\u6210"), command=start_one_click_generate, width=18).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text=c("\u53d6\u6d88"), command=one_key_window.destroy, width=15).pack(side=tk.LEFT, padx=5)
+
+    def batch_generate(self, mode="work"):
         """批量生成HTML文件 - 以当前文件为模板，添加电流随机波动"""
+        mode_labels = {
+            "work": "工作模式",
+            "sleep": "休眠模式"
+        }
+        mode_label = mode_labels.get(mode, "工作模式")
+        mode_key = "sleep" if mode == "sleep" else "work"
+
         if not self.html_files:
             messagebox.showwarning("警告", "请先加载HTML文件！")
             return
@@ -4780,7 +5320,7 @@ class EChartsEditor:
 
         # 创建批量生成窗口
         batch_window = tk.Toplevel(self.root)
-        batch_window.title("批量生成HTML文件")
+        batch_window.title(f"批生成{mode_label}HTML文件")
         batch_window.geometry("1050x700")
         batch_window.minsize(1050, 700)
 
@@ -4811,7 +5351,7 @@ class EChartsEditor:
         # 标题
         title_frame = ttk.Frame(scrollable_frame)
         title_frame.pack(fill=tk.X, padx=10, pady=10)
-        ttk.Label(title_frame, text="批量生成HTML文件", font=('Arial', 14, 'bold')).pack()
+        ttk.Label(title_frame, text=f"批生成{mode_label}HTML文件", font=('Arial', 14, 'bold')).pack()
         ttk.Label(title_frame, text=f"当前模板文件：{self.html_files[self.current_file_index]['name']}",
                  foreground='blue').pack(pady=5)
 
@@ -4821,14 +5361,17 @@ class EChartsEditor:
 
         # 加载保存的参数
         import json
-        config_file = os.path.join(os.path.dirname(__file__), 'batch_generate_config.json')
+        config_file = os.path.join(os.path.dirname(__file__), f'batch_generate_{mode_key}_config.json')
+        legacy_config_file = os.path.join(os.path.dirname(__file__), 'batch_generate_config.json')
         saved_params = {}
-        if os.path.exists(config_file):
+        load_config_file = config_file if os.path.exists(config_file) else legacy_config_file
+        if os.path.exists(load_config_file):
             try:
-                with open(config_file, 'r', encoding='utf-8') as f:
+                with open(load_config_file, 'r', encoding='utf-8') as f:
                     saved_params = json.load(f)
             except:
                 pass
+        saved_params.pop('output_dir', None)
 
         # 生成数量
         ttk.Label(params_frame, text="生成数量:").grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -4925,12 +5468,10 @@ class EChartsEditor:
         output_dir_entry = ttk.Entry(params_frame, width=40)
         output_dir_entry.grid(row=8, column=1, padx=5, pady=5, columnspan=3, sticky=tk.W)
 
-        # 默认输出目录为保存的目录或当前文件所在目录
-        if "output_dir" in saved_params and os.path.exists(saved_params["output_dir"]):
-            output_dir_entry.insert(0, saved_params["output_dir"])
-        elif self.file_path:
-            default_dir = os.path.dirname(self.file_path)
-            output_dir_entry.insert(0, default_dir)
+        # 默认输出目录为当前上传HTML文件所在目录的上一级
+        template_path = self.html_files[self.current_file_index]['path']
+        output_dir_entry.delete(0, tk.END)
+        output_dir_entry.insert(0, self._get_upload_parent_dir(template_path))
 
         def browse_output_dir():
             directory = filedialog.askdirectory(title="选择输出目录", parent=batch_window)
@@ -5154,561 +5695,16 @@ class EChartsEditor:
                         except:
                             pass
 
-                # 获取当前文件的数据作为模板
+                # ?????????????
                 template_file = self.html_files[self.current_file_index]
+                generated_count = self._run_batch_generate(
+                    template_file, count, range_start, range_end, data_type, fluctuation_type,
+                    fluctuation_mode, fluctuation_value, output_dir, prefix, sample_rate, jump_ratio,
+                    max_limit, peak_clip_enabled, peak_threshold, peak_min_duration, zero_handling,
+                    power_cycle_count, smooth_enabled, smooth_window, smooth_custom_range_enabled,
+                    smooth_custom_min, smooth_custom_max
+                )
 
-                import random
-                import copy
-
-                # 检测电流单位（从option的yAxis中获取）
-                current_unit = "A"  # 默认为A
-                if 'option' in template_file and 'yAxis' in template_file['option']:
-                    yaxis_list = template_file['option']['yAxis']
-                    if isinstance(yaxis_list, list) and len(yaxis_list) >= 2:
-                        # 第二个Y轴通常是电流
-                        current_yaxis = yaxis_list[1]
-                        if 'name' in current_yaxis:
-                            yaxis_name = current_yaxis['name']
-                            # 检查是否包含μA或uA
-                            if 'μA' in yaxis_name or 'uA' in yaxis_name or 'µA' in yaxis_name:
-                                current_unit = "uA"
-
-                generated_count = 0
-
-                for i in range(count):
-                    # 每次都从模板深拷贝（避免累积效应）
-                    new_file_data = copy.deepcopy(template_file)
-
-                    # 根据选择的数据类型添加波动
-                    if data_type == "current" or data_type == "both":
-                        # 对电流数据添加波动
-                        if len(new_file_data['series']) >= 2:
-                            current_series = new_file_data['series'][1]  # 电流series
-                            data = current_series['data']
-
-                            # 先统一处理0值（如果选择了替换为null）
-                            if zero_handling == "to_null":
-                                for j in range(len(data)):
-                                    if isinstance(data[j], list) and len(data[j]) >= 2:
-                                        if data[j][1] == 0:
-                                            data[j][1] = None
-
-                            # 如果是跳跃波动，先确定哪些点需要波动
-                            if fluctuation_type == "jump":
-                                # 计算需要波动的数据点数量
-                                total_points = min(range_end + 1, len(data)) - range_start
-                                jump_count = int(total_points * jump_ratio / 100)
-                                # 随机选择需要波动的索引
-                                all_indices = list(range(range_start, min(range_end + 1, len(data))))
-                                jump_indices = set(random.sample(all_indices, jump_count)) if jump_count > 0 else set()
-                            else:
-                                jump_indices = None
-
-                            # 根据波动模式处理
-                            if fluctuation_mode == "overall":
-                                # 整体偏移模式：为整个文件生成一个固定的偏移量
-                                if fluctuation_type == "percent" or fluctuation_type == "jump":
-                                    # 计算范围内的平均值（根据零值处理选项决定是否包含0值）
-                                    if zero_handling == "as_data":
-                                        valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
-                                                       if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
-                                    else:
-                                        valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
-                                                       if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None and data[j][1] != 0]
-                                    if valid_values:
-                                        avg_value = sum(valid_values) / len(valid_values)
-                                        fluctuation_range = avg_value * (fluctuation_value / 100)
-                                        overall_offset = random.uniform(-fluctuation_range, fluctuation_range)
-                                    else:
-                                        overall_offset = 0
-                                else:
-                                    overall_offset = fluctuation_value
-
-                                # 对指定范围内的所有数据点应用相同的偏移
-                                for j in range(range_start, min(range_end + 1, len(data))):
-                                    # 如果是跳跃波动，检查当前索引是否在跳跃列表中
-                                    if fluctuation_type == "jump" and j not in jump_indices:
-                                        continue
-
-                                    if isinstance(data[j], list) and len(data[j]) >= 2:
-                                        current_value = data[j][1]
-
-                                        # 根据零值处理选项处理0值
-                                        if current_value is None:
-                                            continue
-                                        if current_value == 0:
-                                            if zero_handling == "default":
-                                                continue  # 跳过0值
-                                            elif zero_handling == "to_null":
-                                                data[j][1] = None  # 替换为null
-                                                continue
-                                            # zero_handling == "as_data" 时，继续处理0值作为实际数据
-
-                                        if fluctuation_type == "percent" or fluctuation_type == "jump":
-                                            new_value = current_value + overall_offset
-                                        else:
-                                            new_value = current_value + overall_offset
-                                        # 检查是否超过上限
-                                        if new_value >= 0:
-                                            if max_limit is None or new_value <= max_limit:
-                                                data[j][1] = new_value
-                            else:
-                                # 每点独立模式：每个数据点独立随机波动
-                                for j in range(range_start, min(range_end + 1, len(data))):
-                                    # 如果是跳跃波动，检查当前索引是否在跳跃列表中
-                                    if fluctuation_type == "jump" and j not in jump_indices:
-                                        continue
-
-                                    if isinstance(data[j], list) and len(data[j]) >= 2:
-                                        current_value = data[j][1]
-
-                                        # 根据零值处理选项处理0值
-                                        if current_value is None:
-                                            continue
-                                        if current_value == 0:
-                                            if zero_handling == "default":
-                                                continue  # 跳过0值
-                                            elif zero_handling == "to_null":
-                                                data[j][1] = None  # 替换为null
-                                                continue
-                                            # zero_handling == "as_data" 时，继续处理0值作为实际数据
-
-                                        # 根据波动类型处理
-                                        if fluctuation_type == "percent" or fluctuation_type == "jump":
-                                            # 百分比随机波动
-                                            fluctuation_range = current_value * (fluctuation_value / 100)
-                                            random_fluctuation = random.uniform(-fluctuation_range, fluctuation_range)
-                                            new_value = current_value + random_fluctuation
-                                            # 检查是否超过上限
-                                            if new_value >= 0:
-                                                if max_limit is None or new_value <= max_limit:
-                                                    data[j][1] = new_value
-                                        else:
-                                            # 固定值加减
-                                            new_value = current_value + fluctuation_value
-                                            # 检查是否超过上限
-                                            if new_value >= 0:
-                                                if max_limit is None or new_value <= max_limit:
-                                                    data[j][1] = new_value
-
-                    if data_type == "voltage" or data_type == "both":
-                        # 对电压数据添加波动
-                        if len(new_file_data['series']) >= 1:
-                            voltage_series = new_file_data['series'][0]  # 电压series
-                            data = voltage_series['data']
-
-                            # 先统一处理0值（如果选择了替换为null）
-                            if zero_handling == "to_null":
-                                for j in range(len(data)):
-                                    if isinstance(data[j], list) and len(data[j]) >= 2:
-                                        if data[j][1] == 0:
-                                            data[j][1] = None
-
-                            # 如果是跳跃波动，先确定哪些点需要波动
-                            if fluctuation_type == "jump":
-                                # 计算需要波动的数据点数量
-                                total_points = min(range_end + 1, len(data)) - range_start
-                                jump_count = int(total_points * jump_ratio / 100)
-                                # 随机选择需要波动的索引
-                                all_indices = list(range(range_start, min(range_end + 1, len(data))))
-                                jump_indices = set(random.sample(all_indices, jump_count)) if jump_count > 0 else set()
-                            else:
-                                jump_indices = None
-
-                            # 根据波动模式处理
-                            if fluctuation_mode == "overall":
-                                # 整体偏移模式：为整个文件生成一个固定的偏移量
-                                if fluctuation_type == "percent" or fluctuation_type == "jump":
-                                    # 计算范围内的平均值（根据零值处理选项决定是否包含0值）
-                                    if zero_handling == "as_data":
-                                        valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
-                                                       if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
-                                    else:
-                                        valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
-                                                       if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None and data[j][1] != 0]
-                                    if valid_values:
-                                        avg_value = sum(valid_values) / len(valid_values)
-                                        fluctuation_range = avg_value * (fluctuation_value / 100)
-                                        overall_offset = random.uniform(-fluctuation_range, fluctuation_range)
-                                    else:
-                                        overall_offset = 0
-                                else:
-                                    overall_offset = fluctuation_value
-
-                                # 对指定范围内的所有数据点应用相同的偏移
-                                for j in range(range_start, min(range_end + 1, len(data))):
-                                    # 如果是跳跃波动，检查当前索引是否在跳跃列表中
-                                    if fluctuation_type == "jump" and j not in jump_indices:
-                                        continue
-
-                                    if isinstance(data[j], list) and len(data[j]) >= 2:
-                                        voltage_value = data[j][1]
-
-                                        # 根据零值处理选项处理0值
-                                        if voltage_value is None:
-                                            continue
-                                        if voltage_value == 0:
-                                            if zero_handling == "default":
-                                                continue  # 跳过0值
-                                            elif zero_handling == "to_null":
-                                                data[j][1] = None  # 替换为null
-                                                continue
-                                            # zero_handling == "as_data" 时，继续处理0值作为实际数据
-
-                                        if fluctuation_type == "percent" or fluctuation_type == "jump":
-                                            new_value = voltage_value + overall_offset
-                                        else:
-                                            new_value = voltage_value + overall_offset
-                                        # 检查是否超过上限
-                                        if new_value >= 0:
-                                            if max_limit is None or new_value <= max_limit:
-                                                data[j][1] = new_value
-                            else:
-                                # 每点独立模式：每个数据点独立随机波动
-                                for j in range(range_start, min(range_end + 1, len(data))):
-                                    # 如果是跳跃波动，检查当前索引是否在跳跃列表中
-                                    if fluctuation_type == "jump" and j not in jump_indices:
-                                        continue
-
-                                    if isinstance(data[j], list) and len(data[j]) >= 2:
-                                        voltage_value = data[j][1]
-
-                                        # 根据零值处理选项处理0值
-                                        if voltage_value is None:
-                                            continue
-                                        if voltage_value == 0:
-                                            if zero_handling == "default":
-                                                continue  # 跳过0值
-                                            elif zero_handling == "to_null":
-                                                data[j][1] = None  # 替换为null
-                                                continue
-                                            # zero_handling == "as_data" 时，继续处理0值作为实际数据
-
-                                        # 根据波动类型处理
-                                        if fluctuation_type == "percent" or fluctuation_type == "jump":
-                                            # 百分比随机波动
-                                            fluctuation_range = voltage_value * (fluctuation_value / 100)
-                                            random_fluctuation = random.uniform(-fluctuation_range, fluctuation_range)
-                                            new_value = voltage_value + random_fluctuation
-                                            # 检查是否超过上限
-                                            if new_value >= 0:
-                                                if max_limit is None or new_value <= max_limit:
-                                                    data[j][1] = new_value
-                                        else:
-                                            # 固定值加减
-                                            new_value = voltage_value + fluctuation_value
-                                            # 检查是否超过上限
-                                            if new_value >= 0:
-                                                if max_limit is None or new_value <= max_limit:
-                                                    data[j][1] = new_value
-
-                    # 应用批削峰
-                    if peak_clip_enabled and peak_threshold is not None:
-                        def _clip_series(data, avg_value):
-                            """对一个series的data列表按连续段逻辑削峰"""
-                            bound = min(range_end + 1, len(data))
-                            i = range_start
-                            while i < bound:
-                                if isinstance(data[i], list) and len(data[i]) >= 2 and data[i][1] is not None and data[i][1] > peak_threshold:
-                                    # 找连续超阈值段的结束位置
-                                    run_start = i
-                                    while i < bound and isinstance(data[i], list) and len(data[i]) >= 2 and data[i][1] is not None and data[i][1] > peak_threshold:
-                                        i += 1
-                                    run_length = i - run_start
-                                    # 若未设最短持续点数，或连续段长度 < 最短持续点数，则削峰
-                                    if peak_min_duration is None or run_length < peak_min_duration:
-                                        for k in range(run_start, i):
-                                            data[k][1] = avg_value
-                                    # 否则视为坡度，保留
-                                else:
-                                    i += 1
-
-                        # 对电流数据进行削峰
-                        if (data_type == "current" or data_type == "both") and len(new_file_data['series']) >= 2:
-                            current_series = new_file_data['series'][1]
-                            data = current_series['data']
-                            valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
-                                          if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
-                            if valid_values:
-                                avg_value = sum(valid_values) / len(valid_values)
-                                _clip_series(data, avg_value)
-
-                        # 对电压数据进行削峰
-                        if (data_type == "voltage" or data_type == "both") and len(new_file_data['series']) >= 1:
-                            voltage_series = new_file_data['series'][0]
-                            data = voltage_series['data']
-                            valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
-                                          if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
-                            if valid_values:
-                                avg_value = sum(valid_values) / len(valid_values)
-                                _clip_series(data, avg_value)
-
-                    # 应用平滑输出（移动平均）
-                    if smooth_enabled and smooth_window >= 2:
-                        # 对电流数据进行平滑（需要检查电压变化）
-                        if (data_type == "current" or data_type == "both") and len(new_file_data['series']) >= 2:
-                            voltage_series = new_file_data['series'][0]
-                            current_series = new_file_data['series'][1]
-                            voltage_data = voltage_series['data']
-                            current_data = current_series['data']
-
-                            # 创建平滑后的数据副本
-                            smoothed_data = []
-                            for j in range(len(current_data)):
-                                if isinstance(current_data[j], list) and len(current_data[j]) >= 2:
-                                    timestamp = current_data[j][0]
-                                    value = current_data[j][1]
-
-                                    # 如果值为None，保持None
-                                    if value is None:
-                                        smoothed_data.append([timestamp, None])
-                                        continue
-
-                                    # 如果启用自定义异常值范围且当前值在范围外，视为需要保留的异常值，不平滑
-                                    if smooth_custom_range_enabled and not (smooth_custom_min <= value <= smooth_custom_max):
-                                        smoothed_data.append([timestamp, value])
-                                        continue
-
-                                    # 获取当前点的电压值
-                                    current_voltage = None
-                                    if j < len(voltage_data) and isinstance(voltage_data[j], list) and len(voltage_data[j]) >= 2:
-                                        current_voltage = voltage_data[j][1]
-
-                                    # 如果当前电压为None，不进行平滑
-                                    if current_voltage is None:
-                                        smoothed_data.append([timestamp, value])
-                                        continue
-
-                                    # 计算窗口范围（中心对齐）
-                                    half_window = smooth_window // 2
-                                    start_idx = max(0, j - half_window)
-                                    end_idx = min(len(current_data), j + half_window + 1)
-
-                                    # 收集窗口内电压稳定的有效值（电压变化小于0.5V）
-                                    voltage_threshold = 0.5
-                                    window_values = []
-                                    for k in range(start_idx, end_idx):
-                                        if isinstance(current_data[k], list) and len(current_data[k]) >= 2 and current_data[k][1] is not None:
-                                            # 如果启用自定义范围，排除窗口内的异常值
-                                            if smooth_custom_range_enabled and not (smooth_custom_min <= current_data[k][1] <= smooth_custom_max):
-                                                continue
-                                            # 检查对应的电压值
-                                            if k < len(voltage_data) and isinstance(voltage_data[k], list) and len(voltage_data[k]) >= 2:
-                                                window_voltage = voltage_data[k][1]
-                                                if window_voltage is not None and abs(window_voltage - current_voltage) < voltage_threshold:
-                                                    window_values.append(current_data[k][1])
-
-                                    # 检查是否应该进行平滑
-                                    should_smooth = False
-                                    if len(window_values) >= 2:
-                                        max_val = max(window_values)
-                                        min_val = min(window_values)
-
-                                        # 如果窗口内电流变化剧烈（最大值和最小值差异超过平均值的50%），不平滑
-                                        # 这样可以保护开关机点的突变特征
-                                        avg_val = sum(window_values) / len(window_values)
-                                        if avg_val > 0:
-                                            variation_ratio = (max_val - min_val) / avg_val
-                                            # 如果变化幅度小于50%，认为是稳定区域，可以平滑
-                                            if variation_ratio < 0.5:
-                                                should_smooth = True
-                                        else:
-                                            # 平均值为0或接近0，不平滑
-                                            should_smooth = False
-
-                                    # 计算平均值
-                                    if should_smooth:
-                                        avg_value = sum(window_values) / len(window_values)
-                                        smoothed_data.append([timestamp, avg_value])
-                                    else:
-                                        # 不平滑，保持原值
-                                        smoothed_data.append([timestamp, value])
-                                else:
-                                    smoothed_data.append(current_data[j])
-
-                            # 替换原始数据
-                            current_series['data'] = smoothed_data
-
-                        # 对电压数据进行平滑
-                        if (data_type == "voltage" or data_type == "both") and len(new_file_data['series']) >= 1:
-                            voltage_series = new_file_data['series'][0]
-                            data = voltage_series['data']
-
-                            # 创建平滑后的数据副本
-                            smoothed_data = []
-                            for j in range(len(data)):
-                                if isinstance(data[j], list) and len(data[j]) >= 2:
-                                    timestamp = data[j][0]
-                                    value = data[j][1]
-
-                                    # 如果值为None，保持None
-                                    if value is None:
-                                        smoothed_data.append([timestamp, None])
-                                        continue
-
-                                    # 如果启用自定义异常值范围且当前值在范围外，视为需要保留的异常值，不平滑
-                                    if smooth_custom_range_enabled and not (smooth_custom_min <= value <= smooth_custom_max):
-                                        smoothed_data.append([timestamp, value])
-                                        continue
-
-                                    # 计算窗口范围（中心对齐）
-                                    half_window = smooth_window // 2
-                                    start_idx = max(0, j - half_window)
-                                    end_idx = min(len(data), j + half_window + 1)
-
-                                    # 收集窗口内的有效值
-                                    window_values = []
-                                    for k in range(start_idx, end_idx):
-                                        if isinstance(data[k], list) and len(data[k]) >= 2 and data[k][1] is not None:
-                                            # 如果启用自定义范围，排除窗口内的异常值
-                                            if smooth_custom_range_enabled and not (smooth_custom_min <= data[k][1] <= smooth_custom_max):
-                                                continue
-                                            window_values.append(data[k][1])
-
-                                    # 计算平均值
-                                    if window_values:
-                                        avg_value = sum(window_values) / len(window_values)
-                                        smoothed_data.append([timestamp, avg_value])
-                                    else:
-                                        smoothed_data.append([timestamp, value])
-                                else:
-                                    smoothed_data.append(data[j])
-
-                            # 替换原始数据
-                            voltage_series['data'] = smoothed_data
-
-                    # 应用采样率
-                    if sample_rate > 1:
-                        for series in new_file_data['series']:
-                            if 'data' in series:
-                                # 对数据进行采样，每sample_rate个取1个
-                                series['data'] = [series['data'][idx] for idx in range(0, len(series['data']), sample_rate)]
-
-                    # 统计开关机次数（如果启用）
-                    power_cycle_count_value = 0
-                    if power_cycle_count and len(new_file_data['series']) >= 2:
-                        current_series = new_file_data['series'][1]  # 电流series
-                        current_data = current_series['data']
-
-                        # 计算电流阈值：使用所有非null值的平均值的10%作为阈值
-                        valid_currents = [point[1] for point in current_data
-                                        if isinstance(point, list) and len(point) >= 2
-                                        and point[1] is not None and point[1] > 0]
-
-                        if valid_currents:
-                            threshold = sum(valid_currents) / len(valid_currents) * 0.1
-
-                            # 检测状态变化：2次电流变化计为1次开关机（开机+关机）
-                            previous_state = None  # None表示未初始化，True表示高电流，False表示低/无电流
-                            state_change_count = 0  # 状态变化次数
-
-                            for point in current_data:
-                                if isinstance(point, list) and len(point) >= 2:
-                                    current_value = point[1]
-
-                                    # 确定当前状态
-                                    if current_value is None or current_value <= threshold:
-                                        current_state = False  # 低/无电流
-                                    else:
-                                        current_state = True  # 高电流
-
-                                    # 检测状态变化
-                                    if previous_state is not None and previous_state != current_state:
-                                        state_change_count += 1
-
-                                    previous_state = current_state
-
-                            # 2次状态变化算1次开关机操作
-                            power_cycle_count_value = state_change_count // 2
-
-                    # 生成新的HTML文件
-                    # 文件名格式：电流单位为uA时添加-l后缀，单位为A时不添加
-                    if current_unit == "uA":
-                        output_filename = f"{prefix}-{i+1}-l.html"
-                    else:
-                        output_filename = f"{prefix}-{i+1}.html"
-                    output_path = os.path.join(output_dir, output_filename)
-
-                    # 构建新的HTML内容
-                    soup = BeautifulSoup(new_file_data['content'], 'html.parser')
-                    script_tag = soup.find('script', string=lambda text: text and ('option' in text or 'chart' in text))
-
-                    if script_tag:
-                        # 更新option数据
-                        new_file_data['option']['series'] = new_file_data['series']
-                        option_json = json.dumps(new_file_data['option'], ensure_ascii=False, indent=2)
-
-                        # 保留原始script内容，只替换option的JSON部分
-                        original_script = script_tag.string
-                        if original_script:
-                            # 使用正则表达式找到option = {...}; 的部分并替换
-                            import re
-                            # 匹配 const option = {...}; 或 var option = {...};
-                            pattern = r'(const|var)\s+option\s*=\s*\{[\s\S]*?\};'
-
-                            # 使用函数替换，避免反向引用问题
-                            def replace_option(match):
-                                keyword = match.group(1)
-                                return f'{keyword} option = {option_json};'
-
-                            new_script = re.sub(pattern, replace_option, original_script)
-                            script_tag.string = new_script
-
-                    # 添加开关机次数显示（如果启用）
-                    if power_cycle_count:
-                        # 先查找是否已存在开关机次数显示区域
-                        existing_div = soup.find('div', id='power-cycle-counter')
-
-                        if existing_div:
-                            # 如果已存在，更新文本内容和样式
-                            existing_div.string = f'开关机次数: {power_cycle_count_value}'
-                            existing_div['style'] = (
-                                'position: absolute; '
-                                'top: 80px; '
-                                'right: 1085px; '
-                                'background-color: rgba(255, 255, 255, 0.9); '
-                                'padding: 10px 15px; '
-                                'border-radius: 5px; '
-                                'box-shadow: 0 2px 5px rgba(0,0,0,0.2); '
-                                'font-family: Arial, sans-serif; '
-                                'font-size: 14px; '
-                                'z-index: 1000;'
-                            )
-                        else:
-                            # 如果不存在，创建新的div
-                            power_cycle_div = soup.new_tag('div')
-                            power_cycle_div['id'] = 'power-cycle-counter'
-                            power_cycle_div['style'] = (
-                                'position: absolute; '
-                                'top: 80px; '
-                                'right: 1085px; '
-                                'background-color: rgba(255, 255, 255, 0.9); '
-                                'padding: 10px 15px; '
-                                'border-radius: 5px; '
-                                'box-shadow: 0 2px 5px rgba(0,0,0,0.2); '
-                                'font-family: Arial, sans-serif; '
-                                'font-size: 14px; '
-                                'z-index: 1000;'
-                            )
-                            power_cycle_div.string = f'开关机次数: {power_cycle_count_value}'
-
-                            # 尝试找到body标签，如果找不到就找html标签
-                            body_tag = soup.find('body')
-                            if body_tag:
-                                body_tag.insert(0, power_cycle_div)
-                            else:
-                                html_tag = soup.find('html')
-                                if html_tag:
-                                    html_tag.insert(0, power_cycle_div)
-                                else:
-                                    # 如果连html标签都没有，直接添加到soup
-                                    soup.insert(0, power_cycle_div)
-
-                    # 保存文件（无论是否找到script标签都保存）
-                    with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(str(soup))
-
-                    generated_count += 1
 
                 batch_window.destroy()
                 messagebox.showinfo("成功", f"成功生成 {generated_count} 个HTML文件！\n\n保存位置：{output_dir}")
@@ -5720,6 +5716,569 @@ class EChartsEditor:
 
         ttk.Button(btn_frame, text="开始生成", command=start_batch_generate, width=15).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="取消", command=batch_window.destroy, width=15).pack(side=tk.LEFT, padx=5)
+
+
+    def _run_batch_generate(self, template_file, count, range_start, range_end, data_type,
+                            fluctuation_type, fluctuation_mode, fluctuation_value, output_dir,
+                            prefix, sample_rate, jump_ratio, max_limit, peak_clip_enabled,
+                            peak_threshold, peak_min_duration, zero_handling, power_cycle_count,
+                            smooth_enabled, smooth_window, smooth_custom_range_enabled,
+                            smooth_custom_min, smooth_custom_max):
+        """????????????????"""
+        import random
+        import copy
+
+        # 检测电流单位（从option的yAxis中获取）
+        current_unit = "A"  # 默认为A
+        if 'option' in template_file and 'yAxis' in template_file['option']:
+            yaxis_list = template_file['option']['yAxis']
+            if isinstance(yaxis_list, list) and len(yaxis_list) >= 2:
+                # 第二个Y轴通常是电流
+                current_yaxis = yaxis_list[1]
+                if 'name' in current_yaxis:
+                    yaxis_name = current_yaxis['name']
+                    # 检查是否包含μA或uA
+                    if 'μA' in yaxis_name or 'uA' in yaxis_name or 'µA' in yaxis_name:
+                        current_unit = "uA"
+
+        generated_count = 0
+
+        for i in range(count):
+            # 每次都从模板深拷贝（避免累积效应）
+            new_file_data = copy.deepcopy(template_file)
+
+            # 根据选择的数据类型添加波动
+            if data_type == "current" or data_type == "both":
+                # 对电流数据添加波动
+                if len(new_file_data['series']) >= 2:
+                    current_series = new_file_data['series'][1]  # 电流series
+                    data = current_series['data']
+
+                    # 先统一处理0值（如果选择了替换为null）
+                    if zero_handling == "to_null":
+                        for j in range(len(data)):
+                            if isinstance(data[j], list) and len(data[j]) >= 2:
+                                if data[j][1] == 0:
+                                    data[j][1] = None
+
+                    # 如果是跳跃波动，先确定哪些点需要波动
+                    if fluctuation_type == "jump":
+                        # 计算需要波动的数据点数量
+                        total_points = min(range_end + 1, len(data)) - range_start
+                        jump_count = int(total_points * jump_ratio / 100)
+                        # 随机选择需要波动的索引
+                        all_indices = list(range(range_start, min(range_end + 1, len(data))))
+                        jump_indices = set(random.sample(all_indices, jump_count)) if jump_count > 0 else set()
+                    else:
+                        jump_indices = None
+
+                    # 根据波动模式处理
+                    if fluctuation_mode == "overall":
+                        # 整体偏移模式：为整个文件生成一个固定的偏移量
+                        if fluctuation_type == "percent" or fluctuation_type == "jump":
+                            # 计算范围内的平均值（根据零值处理选项决定是否包含0值）
+                            if zero_handling == "as_data":
+                                valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
+                                               if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
+                            else:
+                                valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
+                                               if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None and data[j][1] != 0]
+                            if valid_values:
+                                avg_value = sum(valid_values) / len(valid_values)
+                                fluctuation_range = avg_value * (fluctuation_value / 100)
+                                overall_offset = random.uniform(-fluctuation_range, fluctuation_range)
+                            else:
+                                overall_offset = 0
+                        else:
+                            overall_offset = fluctuation_value
+
+                        # 对指定范围内的所有数据点应用相同的偏移
+                        for j in range(range_start, min(range_end + 1, len(data))):
+                            # 如果是跳跃波动，检查当前索引是否在跳跃列表中
+                            if fluctuation_type == "jump" and j not in jump_indices:
+                                continue
+
+                            if isinstance(data[j], list) and len(data[j]) >= 2:
+                                current_value = data[j][1]
+
+                                # 根据零值处理选项处理0值
+                                if current_value is None:
+                                    continue
+                                if current_value == 0:
+                                    if zero_handling == "default":
+                                        continue  # 跳过0值
+                                    elif zero_handling == "to_null":
+                                        data[j][1] = None  # 替换为null
+                                        continue
+                                    # zero_handling == "as_data" 时，继续处理0值作为实际数据
+
+                                if fluctuation_type == "percent" or fluctuation_type == "jump":
+                                    new_value = current_value + overall_offset
+                                else:
+                                    new_value = current_value + overall_offset
+                                # 检查是否超过上限
+                                if new_value >= 0:
+                                    if max_limit is None or new_value <= max_limit:
+                                        data[j][1] = new_value
+                    else:
+                        # 每点独立模式：每个数据点独立随机波动
+                        for j in range(range_start, min(range_end + 1, len(data))):
+                            # 如果是跳跃波动，检查当前索引是否在跳跃列表中
+                            if fluctuation_type == "jump" and j not in jump_indices:
+                                continue
+
+                            if isinstance(data[j], list) and len(data[j]) >= 2:
+                                current_value = data[j][1]
+
+                                # 根据零值处理选项处理0值
+                                if current_value is None:
+                                    continue
+                                if current_value == 0:
+                                    if zero_handling == "default":
+                                        continue  # 跳过0值
+                                    elif zero_handling == "to_null":
+                                        data[j][1] = None  # 替换为null
+                                        continue
+                                    # zero_handling == "as_data" 时，继续处理0值作为实际数据
+
+                                # 根据波动类型处理
+                                if fluctuation_type == "percent" or fluctuation_type == "jump":
+                                    # 百分比随机波动
+                                    fluctuation_range = current_value * (fluctuation_value / 100)
+                                    random_fluctuation = random.uniform(-fluctuation_range, fluctuation_range)
+                                    new_value = current_value + random_fluctuation
+                                    # 检查是否超过上限
+                                    if new_value >= 0:
+                                        if max_limit is None or new_value <= max_limit:
+                                            data[j][1] = new_value
+                                else:
+                                    # 固定值加减
+                                    new_value = current_value + fluctuation_value
+                                    # 检查是否超过上限
+                                    if new_value >= 0:
+                                        if max_limit is None or new_value <= max_limit:
+                                            data[j][1] = new_value
+
+            if data_type == "voltage" or data_type == "both":
+                # 对电压数据添加波动
+                if len(new_file_data['series']) >= 1:
+                    voltage_series = new_file_data['series'][0]  # 电压series
+                    data = voltage_series['data']
+
+                    # 先统一处理0值（如果选择了替换为null）
+                    if zero_handling == "to_null":
+                        for j in range(len(data)):
+                            if isinstance(data[j], list) and len(data[j]) >= 2:
+                                if data[j][1] == 0:
+                                    data[j][1] = None
+
+                    # 如果是跳跃波动，先确定哪些点需要波动
+                    if fluctuation_type == "jump":
+                        # 计算需要波动的数据点数量
+                        total_points = min(range_end + 1, len(data)) - range_start
+                        jump_count = int(total_points * jump_ratio / 100)
+                        # 随机选择需要波动的索引
+                        all_indices = list(range(range_start, min(range_end + 1, len(data))))
+                        jump_indices = set(random.sample(all_indices, jump_count)) if jump_count > 0 else set()
+                    else:
+                        jump_indices = None
+
+                    # 根据波动模式处理
+                    if fluctuation_mode == "overall":
+                        # 整体偏移模式：为整个文件生成一个固定的偏移量
+                        if fluctuation_type == "percent" or fluctuation_type == "jump":
+                            # 计算范围内的平均值（根据零值处理选项决定是否包含0值）
+                            if zero_handling == "as_data":
+                                valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
+                                               if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
+                            else:
+                                valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
+                                               if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None and data[j][1] != 0]
+                            if valid_values:
+                                avg_value = sum(valid_values) / len(valid_values)
+                                fluctuation_range = avg_value * (fluctuation_value / 100)
+                                overall_offset = random.uniform(-fluctuation_range, fluctuation_range)
+                            else:
+                                overall_offset = 0
+                        else:
+                            overall_offset = fluctuation_value
+
+                        # 对指定范围内的所有数据点应用相同的偏移
+                        for j in range(range_start, min(range_end + 1, len(data))):
+                            # 如果是跳跃波动，检查当前索引是否在跳跃列表中
+                            if fluctuation_type == "jump" and j not in jump_indices:
+                                continue
+
+                            if isinstance(data[j], list) and len(data[j]) >= 2:
+                                voltage_value = data[j][1]
+
+                                # 根据零值处理选项处理0值
+                                if voltage_value is None:
+                                    continue
+                                if voltage_value == 0:
+                                    if zero_handling == "default":
+                                        continue  # 跳过0值
+                                    elif zero_handling == "to_null":
+                                        data[j][1] = None  # 替换为null
+                                        continue
+                                    # zero_handling == "as_data" 时，继续处理0值作为实际数据
+
+                                if fluctuation_type == "percent" or fluctuation_type == "jump":
+                                    new_value = voltage_value + overall_offset
+                                else:
+                                    new_value = voltage_value + overall_offset
+                                # 检查是否超过上限
+                                if new_value >= 0:
+                                    if max_limit is None or new_value <= max_limit:
+                                        data[j][1] = new_value
+                    else:
+                        # 每点独立模式：每个数据点独立随机波动
+                        for j in range(range_start, min(range_end + 1, len(data))):
+                            # 如果是跳跃波动，检查当前索引是否在跳跃列表中
+                            if fluctuation_type == "jump" and j not in jump_indices:
+                                continue
+
+                            if isinstance(data[j], list) and len(data[j]) >= 2:
+                                voltage_value = data[j][1]
+
+                                # 根据零值处理选项处理0值
+                                if voltage_value is None:
+                                    continue
+                                if voltage_value == 0:
+                                    if zero_handling == "default":
+                                        continue  # 跳过0值
+                                    elif zero_handling == "to_null":
+                                        data[j][1] = None  # 替换为null
+                                        continue
+                                    # zero_handling == "as_data" 时，继续处理0值作为实际数据
+
+                                # 根据波动类型处理
+                                if fluctuation_type == "percent" or fluctuation_type == "jump":
+                                    # 百分比随机波动
+                                    fluctuation_range = voltage_value * (fluctuation_value / 100)
+                                    random_fluctuation = random.uniform(-fluctuation_range, fluctuation_range)
+                                    new_value = voltage_value + random_fluctuation
+                                    # 检查是否超过上限
+                                    if new_value >= 0:
+                                        if max_limit is None or new_value <= max_limit:
+                                            data[j][1] = new_value
+                                else:
+                                    # 固定值加减
+                                    new_value = voltage_value + fluctuation_value
+                                    # 检查是否超过上限
+                                    if new_value >= 0:
+                                        if max_limit is None or new_value <= max_limit:
+                                            data[j][1] = new_value
+
+            # 应用批削峰
+            if peak_clip_enabled and peak_threshold is not None:
+                def _clip_series(data, avg_value):
+                    """对一个series的data列表按连续段逻辑削峰"""
+                    bound = min(range_end + 1, len(data))
+                    i = range_start
+                    while i < bound:
+                        if isinstance(data[i], list) and len(data[i]) >= 2 and data[i][1] is not None and data[i][1] > peak_threshold:
+                            # 找连续超阈值段的结束位置
+                            run_start = i
+                            while i < bound and isinstance(data[i], list) and len(data[i]) >= 2 and data[i][1] is not None and data[i][1] > peak_threshold:
+                                i += 1
+                            run_length = i - run_start
+                            # 若未设最短持续点数，或连续段长度 < 最短持续点数，则削峰
+                            if peak_min_duration is None or run_length < peak_min_duration:
+                                for k in range(run_start, i):
+                                    data[k][1] = avg_value
+                            # 否则视为坡度，保留
+                        else:
+                            i += 1
+
+                # 对电流数据进行削峰
+                if (data_type == "current" or data_type == "both") and len(new_file_data['series']) >= 2:
+                    current_series = new_file_data['series'][1]
+                    data = current_series['data']
+                    valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
+                                  if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
+                    if valid_values:
+                        avg_value = sum(valid_values) / len(valid_values)
+                        _clip_series(data, avg_value)
+
+                # 对电压数据进行削峰
+                if (data_type == "voltage" or data_type == "both") and len(new_file_data['series']) >= 1:
+                    voltage_series = new_file_data['series'][0]
+                    data = voltage_series['data']
+                    valid_values = [data[j][1] for j in range(range_start, min(range_end + 1, len(data)))
+                                  if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
+                    if valid_values:
+                        avg_value = sum(valid_values) / len(valid_values)
+                        _clip_series(data, avg_value)
+
+            # 应用平滑输出（移动平均）
+            if smooth_enabled and smooth_window >= 2:
+                # 对电流数据进行平滑（需要检查电压变化）
+                if (data_type == "current" or data_type == "both") and len(new_file_data['series']) >= 2:
+                    voltage_series = new_file_data['series'][0]
+                    current_series = new_file_data['series'][1]
+                    voltage_data = voltage_series['data']
+                    current_data = current_series['data']
+
+                    # 创建平滑后的数据副本
+                    smoothed_data = []
+                    for j in range(len(current_data)):
+                        if isinstance(current_data[j], list) and len(current_data[j]) >= 2:
+                            timestamp = current_data[j][0]
+                            value = current_data[j][1]
+
+                            # 如果值为None，保持None
+                            if value is None:
+                                smoothed_data.append([timestamp, None])
+                                continue
+
+                            # 如果启用自定义异常值范围且当前值在范围外，视为需要保留的异常值，不平滑
+                            if smooth_custom_range_enabled and not (smooth_custom_min <= value <= smooth_custom_max):
+                                smoothed_data.append([timestamp, value])
+                                continue
+
+                            # 获取当前点的电压值
+                            current_voltage = None
+                            if j < len(voltage_data) and isinstance(voltage_data[j], list) and len(voltage_data[j]) >= 2:
+                                current_voltage = voltage_data[j][1]
+
+                            # 如果当前电压为None，不进行平滑
+                            if current_voltage is None:
+                                smoothed_data.append([timestamp, value])
+                                continue
+
+                            # 计算窗口范围（中心对齐）
+                            half_window = smooth_window // 2
+                            start_idx = max(0, j - half_window)
+                            end_idx = min(len(current_data), j + half_window + 1)
+
+                            # 收集窗口内电压稳定的有效值（电压变化小于0.5V）
+                            voltage_threshold = 0.5
+                            window_values = []
+                            for k in range(start_idx, end_idx):
+                                if isinstance(current_data[k], list) and len(current_data[k]) >= 2 and current_data[k][1] is not None:
+                                    # 如果启用自定义范围，排除窗口内的异常值
+                                    if smooth_custom_range_enabled and not (smooth_custom_min <= current_data[k][1] <= smooth_custom_max):
+                                        continue
+                                    # 检查对应的电压值
+                                    if k < len(voltage_data) and isinstance(voltage_data[k], list) and len(voltage_data[k]) >= 2:
+                                        window_voltage = voltage_data[k][1]
+                                        if window_voltage is not None and abs(window_voltage - current_voltage) < voltage_threshold:
+                                            window_values.append(current_data[k][1])
+
+                            # 检查是否应该进行平滑
+                            should_smooth = False
+                            if len(window_values) >= 2:
+                                max_val = max(window_values)
+                                min_val = min(window_values)
+
+                                # 如果窗口内电流变化剧烈（最大值和最小值差异超过平均值的50%），不平滑
+                                # 这样可以保护开关机点的突变特征
+                                avg_val = sum(window_values) / len(window_values)
+                                if avg_val > 0:
+                                    variation_ratio = (max_val - min_val) / avg_val
+                                    # 如果变化幅度小于50%，认为是稳定区域，可以平滑
+                                    if variation_ratio < 0.5:
+                                        should_smooth = True
+                                else:
+                                    # 平均值为0或接近0，不平滑
+                                    should_smooth = False
+
+                            # 计算平均值
+                            if should_smooth:
+                                avg_value = sum(window_values) / len(window_values)
+                                smoothed_data.append([timestamp, avg_value])
+                            else:
+                                # 不平滑，保持原值
+                                smoothed_data.append([timestamp, value])
+                        else:
+                            smoothed_data.append(current_data[j])
+
+                    # 替换原始数据
+                    current_series['data'] = smoothed_data
+
+                # 对电压数据进行平滑
+                if (data_type == "voltage" or data_type == "both") and len(new_file_data['series']) >= 1:
+                    voltage_series = new_file_data['series'][0]
+                    data = voltage_series['data']
+
+                    # 创建平滑后的数据副本
+                    smoothed_data = []
+                    for j in range(len(data)):
+                        if isinstance(data[j], list) and len(data[j]) >= 2:
+                            timestamp = data[j][0]
+                            value = data[j][1]
+
+                            # 如果值为None，保持None
+                            if value is None:
+                                smoothed_data.append([timestamp, None])
+                                continue
+
+                            # 如果启用自定义异常值范围且当前值在范围外，视为需要保留的异常值，不平滑
+                            if smooth_custom_range_enabled and not (smooth_custom_min <= value <= smooth_custom_max):
+                                smoothed_data.append([timestamp, value])
+                                continue
+
+                            # 计算窗口范围（中心对齐）
+                            half_window = smooth_window // 2
+                            start_idx = max(0, j - half_window)
+                            end_idx = min(len(data), j + half_window + 1)
+
+                            # 收集窗口内的有效值
+                            window_values = []
+                            for k in range(start_idx, end_idx):
+                                if isinstance(data[k], list) and len(data[k]) >= 2 and data[k][1] is not None:
+                                    # 如果启用自定义范围，排除窗口内的异常值
+                                    if smooth_custom_range_enabled and not (smooth_custom_min <= data[k][1] <= smooth_custom_max):
+                                        continue
+                                    window_values.append(data[k][1])
+
+                            # 计算平均值
+                            if window_values:
+                                avg_value = sum(window_values) / len(window_values)
+                                smoothed_data.append([timestamp, avg_value])
+                            else:
+                                smoothed_data.append([timestamp, value])
+                        else:
+                            smoothed_data.append(data[j])
+
+                    # 替换原始数据
+                    voltage_series['data'] = smoothed_data
+
+            # 应用采样率
+            if sample_rate > 1:
+                for series in new_file_data['series']:
+                    if 'data' in series:
+                        # 对数据进行采样，每sample_rate个取1个
+                        series['data'] = [series['data'][idx] for idx in range(0, len(series['data']), sample_rate)]
+
+            # 统计开关机次数（如果启用）
+            power_cycle_count_value = 0
+            if power_cycle_count and len(new_file_data['series']) >= 2:
+                current_series = new_file_data['series'][1]  # 电流series
+                current_data = current_series['data']
+
+                # 计算电流阈值：使用所有非null值的平均值的10%作为阈值
+                valid_currents = [point[1] for point in current_data
+                                if isinstance(point, list) and len(point) >= 2
+                                and point[1] is not None and point[1] > 0]
+
+                if valid_currents:
+                    threshold = sum(valid_currents) / len(valid_currents) * 0.1
+
+                    # 检测状态变化：2次电流变化计为1次开关机（开机+关机）
+                    previous_state = None  # None表示未初始化，True表示高电流，False表示低/无电流
+                    state_change_count = 0  # 状态变化次数
+
+                    for point in current_data:
+                        if isinstance(point, list) and len(point) >= 2:
+                            current_value = point[1]
+
+                            # 确定当前状态
+                            if current_value is None or current_value <= threshold:
+                                current_state = False  # 低/无电流
+                            else:
+                                current_state = True  # 高电流
+
+                            # 检测状态变化
+                            if previous_state is not None and previous_state != current_state:
+                                state_change_count += 1
+
+                            previous_state = current_state
+
+                    # 2次状态变化算1次开关机操作
+                    power_cycle_count_value = state_change_count // 2
+
+            # 生成新的HTML文件
+            # 文件名格式：电流单位为uA时添加-l后缀，单位为A时不添加
+            if current_unit == "uA":
+                output_filename = f"{prefix}-{i+1}-l.html"
+            else:
+                output_filename = f"{prefix}-{i+1}.html"
+            output_path = os.path.join(output_dir, output_filename)
+
+            # 构建新的HTML内容
+            soup = BeautifulSoup(new_file_data['content'], 'html.parser')
+            script_tag = soup.find('script', string=lambda text: text and ('option' in text or 'chart' in text))
+
+            if script_tag:
+                # 更新option数据
+                new_file_data['option']['series'] = new_file_data['series']
+                option_json = json.dumps(new_file_data['option'], ensure_ascii=False, indent=2)
+
+                # 保留原始script内容，只替换option的JSON部分
+                original_script = script_tag.string
+                if original_script:
+                    # 使用正则表达式找到option = {...}; 的部分并替换
+                    import re
+                    # 匹配 const option = {...}; 或 var option = {...};
+                    pattern = r'(const|var)\s+option\s*=\s*\{[\s\S]*?\};'
+
+                    # 使用函数替换，避免反向引用问题
+                    def replace_option(match):
+                        keyword = match.group(1)
+                        return f'{keyword} option = {option_json};'
+
+                    new_script = re.sub(pattern, replace_option, original_script)
+                    script_tag.string = new_script
+
+            # 添加开关机次数显示（如果启用）
+            if power_cycle_count:
+                # 先查找是否已存在开关机次数显示区域
+                existing_div = soup.find('div', id='power-cycle-counter')
+
+                if existing_div:
+                    # 如果已存在，更新文本内容和样式
+                    existing_div.string = f'开关机次数: {power_cycle_count_value}'
+                    existing_div['style'] = (
+                        'position: absolute; '
+                        'top: 80px; '
+                        'right: 1085px; '
+                        'background-color: rgba(255, 255, 255, 0.9); '
+                        'padding: 10px 15px; '
+                        'border-radius: 5px; '
+                        'box-shadow: 0 2px 5px rgba(0,0,0,0.2); '
+                        'font-family: Arial, sans-serif; '
+                        'font-size: 14px; '
+                        'z-index: 1000;'
+                    )
+                else:
+                    # 如果不存在，创建新的div
+                    power_cycle_div = soup.new_tag('div')
+                    power_cycle_div['id'] = 'power-cycle-counter'
+                    power_cycle_div['style'] = (
+                        'position: absolute; '
+                        'top: 80px; '
+                        'right: 1085px; '
+                        'background-color: rgba(255, 255, 255, 0.9); '
+                        'padding: 10px 15px; '
+                        'border-radius: 5px; '
+                        'box-shadow: 0 2px 5px rgba(0,0,0,0.2); '
+                        'font-family: Arial, sans-serif; '
+                        'font-size: 14px; '
+                        'z-index: 1000;'
+                    )
+                    power_cycle_div.string = f'开关机次数: {power_cycle_count_value}'
+
+                    # 尝试找到body标签，如果找不到就找html标签
+                    body_tag = soup.find('body')
+                    if body_tag:
+                        body_tag.insert(0, power_cycle_div)
+                    else:
+                        html_tag = soup.find('html')
+                        if html_tag:
+                            html_tag.insert(0, power_cycle_div)
+                        else:
+                            # 如果连html标签都没有，直接添加到soup
+                            soup.insert(0, power_cycle_div)
+
+            # 保存文件（无论是否找到script标签都保存）
+            with open(output_path, 'w', encoding='utf-8') as f:
+                f.write(str(soup))
+
+            generated_count += 1
+
+        return generated_count
 
     def _execute_operation(self, params):
         """执行操作的核心逻辑（预留接口）"""

@@ -259,70 +259,68 @@ class VoltageCurrentAnalyzer:
         voltages = self._voltages
         currents = self._currents
 
-        # 找到14V段
-        mask = np.abs(voltages - 14) <= VOLTAGE_TOLERANCE
-        indices = np.where(mask)[0]
-        if len(indices) == 0:
+        # ????????????????????RT-9V????9V?????14V?
+        voltage_groups = []
+        for target_v in self.voltage_segments:
+            mask = np.abs(voltages - target_v) <= VOLTAGE_TOLERANCE
+            indices = np.where(mask)[0]
+            if len(indices) == 0:
+                continue
+            for g in self._split_continuous(indices.tolist()):
+                voltage_groups.append((target_v, g))
+
+        if not voltage_groups:
             return None
 
-        groups = self._split_continuous(indices.tolist())
-
-        # 检测所有包含密集低电流的14V段（不限制位置和点数范围）
         sleep_groups = []
-        for group_idx, g in enumerate(groups):
-            # 要求至少有50个点才认为是有效段
+        for group_idx, (target_v, g) in enumerate(voltage_groups):
             if len(g) < 50:
                 continue
-            
-            # 检查电流是否真的是休眠电流（uA单位时需要验证）
+
             if self.current_unit == 'uA':
                 group_currents = currents[g]
-                
-                # 先过滤掉明显的高电流点（>10000uA），保留低电流部分
+
                 low_current_mask = group_currents < 10000
                 low_current_count = np.sum(low_current_mask)
-                
-                # 如果有足够多的低电流点（至少50个），说明可能是休眠电流
+
                 if low_current_count >= 50:
                     low_currents = group_currents[low_current_mask]
                     avg_current = np.mean(low_currents)
                     max_current = np.max(low_currents)
-                    
-                    # 低电流部分的平均值应该<1000uA才是真正的休眠电流
+
                     if avg_current < 1000 and max_current < 5000:
-                        sleep_groups.append(g)
-                        logger.info(f"  检测到休眠电流段{group_idx+1} (共{len(g)}个点, 低电流点:{low_current_count}个, 平均:{avg_current:.0f}uA)")
+                        sleep_groups.append((target_v, g))
+                        logger.info(f"  ???{target_v}V?????{group_idx+1} (?{len(g)}??, ????:{low_current_count}?, ??:{avg_current:.0f}uA)")
                     else:
-                        logger.debug(f"  跳过高电流段{group_idx+1} (共{len(g)}个点, 平均:{avg_current:.0f}uA, 最大:{max_current:.0f}uA)")
+                        logger.debug(f"  ??????{group_idx+1} (?{len(g)}??, ??:{avg_current:.0f}uA, ??:{max_current:.0f}uA)")
                 else:
-                    logger.debug(f"  跳过高电流段{group_idx+1} (共{len(g)}个点, 低电流点仅{low_current_count}个)")
+                    logger.debug(f"  ??????{group_idx+1} (?{len(g)}??, ?????{low_current_count}?)")
             else:
-                # 非uA单位，过滤零电流段（电压不在14V时电流为0的数据点不参与统计）
                 group_currents = currents[g]
                 nonzero_mask = group_currents > 0
                 nonzero_count = np.sum(nonzero_mask)
                 if nonzero_count >= 50:
-                    sleep_groups.append(g)
-                    logger.info(f"  检测到休眠电流段{group_idx+1} (共{len(g)}个点, 非零电流点:{nonzero_count}个)")
+                    sleep_groups.append((target_v, g))
+                    logger.info(f"  ???{target_v}V?????{group_idx+1} (?{len(g)}??, ?????:{nonzero_count}?)")
                 else:
-                    logger.debug(f"  跳过段{group_idx+1} (共{len(g)}个点, 非零电流点仅{nonzero_count}个)")
+                    logger.debug(f"  ???{group_idx+1} (?{len(g)}??, ??????{nonzero_count}?)")
 
         if not sleep_groups:
             return None
 
-        # 合并所有休眠组的稳定电流（只保留有效电流部分）
         all_stable = []
-        for g in sleep_groups:
+        sleep_voltage = None
+        for target_v, g in sleep_groups:
+            if sleep_voltage is None:
+                sleep_voltage = target_v
             seg_c = currents[g]
 
-            # 过滤零电流（电压不在14V时对应的无效数据）
             if self.current_unit == 'uA':
                 low_mask = (seg_c > 0) & (seg_c < 10000)
                 seg_c = seg_c[low_mask]
             else:
                 seg_c = seg_c[seg_c > 0]
-            
-            # 去掉前后5%的过渡数据（休眠电流使用更小的trim比例以保留更多真实数据）
+
             trim = int(len(seg_c) * 0.05)
             if trim > 0 and len(seg_c) > trim * 2:
                 stable = seg_c[trim:-trim]
@@ -334,10 +332,12 @@ class VoltageCurrentAnalyzer:
             return None
 
         arr = np.array(all_stable)
-        # 休眠电流不使用IQR过滤，直接使用trim后的真实数据
-        # 因为我们需要的就是真实的最小值和最大值，不应该把低值当作异常值过滤掉
-        result = (float(np.min(arr)), float(np.max(arr)), float(np.mean(arr)))
-        logger.info(f"  休眠14V: {result[0]:.6f}-{result[1]:.6f} (平均:{result[2]:.6f}) {self.current_unit}")
+        filtered = self._remove_outliers(arr)
+        if len(filtered) == 0:
+            filtered = arr
+        result = (float(np.min(filtered)), float(np.max(filtered)), float(np.mean(filtered)))
+        voltage_label = f"{sleep_voltage}V" if sleep_voltage is not None else "??"
+        logger.info(f"  ??{voltage_label}: {result[0]:.6f}-{result[1]:.6f} (??:{result[2]:.6f}) {self.current_unit}")
         return result
 
     def _analyze_voltage_segment(self, voltages, currents, target_v):
@@ -572,7 +572,7 @@ class ChartScreenshot:
             logger.info("请确保已安装Edge浏览器和对应版本的EdgeDriver")
             raise
 
-    def capture(self, html_file: str, output_path: str) -> bool:
+    def capture(self, html_file: str, output_path: str, zoom_hours: float = None) -> bool:
         """
         截取HTML图表并保存为PNG，使用ECharts getDataURL直接导出画布，
         避免save_screenshot传输整个浏览器窗口导致的超时问题。
@@ -608,24 +608,67 @@ class ChartScreenshot:
             )
             logger.info(f"[截图] ECharts实例就绪，准备图表...")
 
-            # 准备图表：重置dataZoom、隐藏控件、调整尺寸，并确保grid.bottom留足时间戳空间
-            # xAxis.axisLabel.fontSize=19，格式"{yyyy}-{MM}-{dd} {HH}:{mm}"，单行约40px
-            # grid.bottom=60 即可，设80留冗余；同时清除HTML里硬编码的height:"1080px"避免resize时被覆盖
+            # 准备图表：重置/设置dataZoom、隐藏控件、调整尺寸
+            # zoom_hours有值时截取数据中间约N小时，用于生成局部截图
             self.driver.execute_script("""
                 var chart = echarts.getInstanceByDom(document.getElementById('chart-container'));
                 if (!chart) return;
-                chart.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
+                var zoomHours = arguments[0];
+                var zoomStart = 0;
+                var zoomEnd = 100;
+                var option = chart.getOption();
+                if (zoomHours && zoomHours > 0) {
+                    var minTs = Infinity;
+                    var maxTs = -Infinity;
+                    var tsCount = 0;
+                    (option.series || []).forEach(function(series) {
+                        (series.data || []).forEach(function(point) {
+                            if (Array.isArray(point) && point.length >= 2 && typeof point[0] === 'number') {
+                                if (point[0] < minTs) minTs = point[0];
+                                if (point[0] > maxTs) maxTs = point[0];
+                                tsCount += 1;
+                            }
+                        });
+                    });
+                    if (tsCount > 1 && isFinite(minTs) && isFinite(maxTs)) {
+                        var range = maxTs - minTs;
+                        var zoomMs = zoomHours * 60 * 60 * 1000;
+                        if (range > zoomMs) {
+                            var center = minTs + range / 2;
+                            var startTs = center - zoomMs / 2;
+                            var endTs = center + zoomMs / 2;
+                            zoomStart = Math.max(0, (startTs - minTs) / range * 100);
+                            zoomEnd = Math.min(100, (endTs - minTs) / range * 100);
+                        }
+                    }
+                }
                 chart.setOption({
                     height: null,
-                    dataZoom: [{show: false}],
+                    dataZoom: [{
+                        show: false,
+                        xAxisIndex: [0],
+                        filterMode: 'none',
+                        start: zoomStart,
+                        end: zoomEnd
+                    }],
                     toolbox: {show: false},
-                    grid: {bottom: 80}
-                });
+                    grid: {bottom: 100},
+                    xAxis: {
+                        axisLabel: {
+                            rotate: 0,
+                            fontSize: 15,
+                            lineHeight: 22,
+                            formatter: '{yyyy}-{MM}-{dd}\\n{HH}:{mm}',
+                            hideOverlap: true
+                        }
+                    }
+                }, {replaceMerge: ['dataZoom']});
+                chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, start: zoomStart, end: zoomEnd });
                 var dom = chart.getDom();
                 dom.style.width  = '1920px';
                 dom.style.height = '1200px';
                 chart.resize();
-            """)
+            """, zoom_hours)
             logger.info(f"[截图] 图表resize完成，等待重绘...")
 
             # 等待resize重绘完成（用JS检测，避免固定sleep）

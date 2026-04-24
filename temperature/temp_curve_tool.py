@@ -80,7 +80,6 @@ COLOR_S1  = "#4472C4"
 COLOR_PV  = "#70AD47"
 COLOR_SV  = "#FFC000"
 COLOR_HUM = "#9DC3E6"
-MARKER_N  = 50          # 每 N 点画一个标记
 
 
 # ── 数据工具 ──────────────────────────────────────────────────────────────────
@@ -657,9 +656,7 @@ class App(tk.Tk):
         def plot_line(s, color, label):
             if s is None or s.empty:
                 return
-            mi = max(1, len(s) // MARKER_N)
             ln, = self.ax1.plot(s.index, s.values, color=color, lw=1.5,
-                                marker="o", markersize=4, markevery=mi,
                                 zorder=3, label=label)
             lines.append(ln); labels.append(label)
 
@@ -701,10 +698,8 @@ class App(tk.Tk):
         if self.show_hum.get():
             sh = self._series(self.df_box, self.col_hum.get(), off_b)
             if sh is not None and not sh.empty:
-                mi = max(1, len(sh) // MARKER_N)
                 ln, = self.ax2.plot(sh.index, sh.values,
                                     color=COLOR_HUM, lw=1.2, ls="--",
-                                    marker="o", markersize=3, markevery=mi,
                                     zorder=2, label="湿度")
                 self.ax2.set_ylabel("湿度 (%)", color=COLOR_HUM)
                 self.ax2.tick_params(axis="y", labelcolor=COLOR_HUM)
