@@ -48,6 +48,7 @@ MIN_STABLE_POINTS = 30        # 最小稳定数据点数
 OUTLIER_STD_FACTOR = 3.5      # 异常值标准差倍数（更宽松，保留更多真实数据）
 STABLE_WINDOW = 50            # 稳定性检测滑动窗口
 STABLE_CV_THRESHOLD = 0.15    # 变异系数阈值（判断稳定）
+COMPARE_DEVIATION_THRESHOLD = 20.0  # 6台样机同电压段电流偏差报警阈值（%）
 
 # 日志配置
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -127,6 +128,171 @@ class HTMLDataExtractor:
         """解析 [[timestamp, value], ...] 格式的数据"""
         points = re.findall(r'\[\s*(\d+)\s*,\s*([-\d.eE+]+)\s*\]', data_text)
         return [(int(ts), float(val)) for ts, val in points]
+
+
+def _format_current(value: float, unit: str) -> str:
+    """格式化电流值，保持和汇总表一致的显示精度。"""
+    if unit == 'uA':
+        return f"{value:.0f}{unit}"
+    return f"{value:.2f}{unit}"
+
+
+def _to_uA_for_compare(value: float, unit: str) -> float:
+    """把电流换算为uA后参与比对，避免A/uA混合时误判。"""
+    return value * 1e6 if unit == 'A' else value
+
+
+def _is_deviation_outlier(value: float, peer_values: List[float], threshold_percent: float) -> bool:
+    """判断当前值是否明显偏离其它样机的中位数。"""
+    if len(peer_values) < 2:
+        return False
+
+    baseline = float(np.median(peer_values))
+    peer_min = min(peer_values)
+    peer_max = max(peer_values)
+
+    if baseline == 0:
+        peers_are_consistent = peer_min == 0 and peer_max == 0
+        return peers_are_consistent and abs(value) > 0
+
+    peer_spread_percent = (peer_max - peer_min) / abs(baseline) * 100
+    if peer_spread_percent > threshold_percent:
+        return False
+
+    deviation_percent = abs(value - baseline) / abs(baseline) * 100
+    return deviation_percent > threshold_percent
+
+
+def collect_report_alert_cells(
+    all_results: Dict,
+    voltage_segments: List[float],
+    threshold_percent: float = COMPARE_DEVIATION_THRESHOLD,
+) -> set:
+    """返回工作模式汇总表中需要标红的单元格坐标(row, column)，坐标从1开始。"""
+    alert_cells = set()
+
+    def mark_outliers(entries: List[Tuple[int, int, float]]):
+        for row_idx, col_idx, value in entries:
+            peer_values = [peer_value for peer_row, _, peer_value in entries if peer_row != row_idx]
+            if _is_deviation_outlier(value, peer_values, threshold_percent):
+                alert_cells.add((row_idx, col_idx))
+
+    for voltage_idx, voltage in enumerate(voltage_segments):
+        range_col = 2 + voltage_idx * 2
+        avg_col = range_col + 1
+        min_entries = []
+        max_entries = []
+        avg_entries = []
+
+        for num in range(1, 7):
+            work_data = all_results.get(num, {}).get('work', {})
+            if voltage not in work_data:
+                continue
+
+            unit = all_results.get(num, {}).get('unit_work', 'A')
+            min_i, max_i, avg_i = work_data[voltage]
+            row_idx = num + 1
+            min_entries.append((row_idx, range_col, _to_uA_for_compare(min_i, unit)))
+            max_entries.append((row_idx, range_col, _to_uA_for_compare(max_i, unit)))
+            avg_entries.append((row_idx, avg_col, _to_uA_for_compare(avg_i, unit)))
+
+        mark_outliers(min_entries)
+        mark_outliers(max_entries)
+        mark_outliers(avg_entries)
+
+    sleep_range_col = 2 + len(voltage_segments) * 2
+    sleep_avg_col = sleep_range_col + 1
+    sleep_min_entries = []
+    sleep_max_entries = []
+    sleep_avg_entries = []
+
+    for num in range(1, 7):
+        sample_result = all_results.get(num, {})
+        if 'sleep' not in sample_result:
+            continue
+
+        unit = sample_result.get('unit_sleep', 'A')
+        min_i, max_i, avg_i = sample_result['sleep']
+        row_idx = num + 1
+        sleep_min_entries.append((row_idx, sleep_range_col, _to_uA_for_compare(min_i, unit)))
+        sleep_max_entries.append((row_idx, sleep_range_col, _to_uA_for_compare(max_i, unit)))
+        sleep_avg_entries.append((row_idx, sleep_avg_col, _to_uA_for_compare(avg_i, unit)))
+
+    mark_outliers(sleep_min_entries)
+    mark_outliers(sleep_max_entries)
+    mark_outliers(sleep_avg_entries)
+
+    return alert_cells
+
+
+def _parse_limit_pair(limits: Optional[Dict]) -> Tuple[Optional[float], Optional[float]]:
+    """从配置中读取上下限，空值表示不检查。"""
+    if not limits:
+        return None, None
+    return limits.get('min'), limits.get('max')
+
+
+def _value_outside_limits(value: float, min_limit: Optional[float], max_limit: Optional[float]) -> bool:
+    if min_limit is not None and value < min_limit:
+        return True
+    if max_limit is not None and value > max_limit:
+        return True
+    return False
+
+
+def collect_limit_alert_cells(
+    all_results: Dict,
+    voltage_segments: List[float],
+    work_limits: Optional[Dict] = None,
+    sleep_limits: Optional[Dict] = None,
+) -> set:
+    """返回超出用户自定义上下限的汇总表单元格坐标(row, column)。"""
+    alert_cells = set()
+    work_min, work_max = _parse_limit_pair(work_limits)
+    sleep_min, sleep_max = _parse_limit_pair(sleep_limits)
+
+    if work_min is not None or work_max is not None:
+        for voltage_idx, voltage in enumerate(voltage_segments):
+            range_col = 2 + voltage_idx * 2
+            avg_col = range_col + 1
+            for num in range(1, 7):
+                work_data = all_results.get(num, {}).get('work', {})
+                if voltage not in work_data:
+                    continue
+
+                unit = all_results.get(num, {}).get('unit_work', 'A')
+                min_i, max_i, avg_i = work_data[voltage]
+                row_idx = num + 1
+                values = [
+                    (range_col, _to_uA_for_compare(min_i, unit) / 1e6),
+                    (range_col, _to_uA_for_compare(max_i, unit) / 1e6),
+                    (avg_col, _to_uA_for_compare(avg_i, unit) / 1e6),
+                ]
+                for col_idx, value in values:
+                    if _value_outside_limits(value, work_min, work_max):
+                        alert_cells.add((row_idx, col_idx))
+
+    if sleep_min is not None or sleep_max is not None:
+        sleep_range_col = 2 + len(voltage_segments) * 2
+        sleep_avg_col = sleep_range_col + 1
+        for num in range(1, 7):
+            sample_result = all_results.get(num, {})
+            if 'sleep' not in sample_result:
+                continue
+
+            unit = sample_result.get('unit_sleep', 'A')
+            min_i, max_i, avg_i = sample_result['sleep']
+            row_idx = num + 1
+            values = [
+                (sleep_range_col, _to_uA_for_compare(min_i, unit)),
+                (sleep_range_col, _to_uA_for_compare(max_i, unit)),
+                (sleep_avg_col, _to_uA_for_compare(avg_i, unit)),
+            ]
+            for col_idx, value in values:
+                if _value_outside_limits(value, sleep_min, sleep_max):
+                    alert_cells.add((row_idx, col_idx))
+
+    return alert_cells
 
 
 class VoltageCurrentAnalyzer:
@@ -608,15 +774,32 @@ class ChartScreenshot:
             )
             logger.info(f"[截图] ECharts实例就绪，准备图表...")
 
-            # 准备图表：重置/设置dataZoom、隐藏控件、调整尺寸
-            # zoom_hours有值时截取数据中间约N小时，用于生成局部截图
+            # 准备图表：隐藏控件、调整尺寸。
+            # 局部截图不使用dataZoom，避免ECharts按局部窗口重算Y轴；
+            # 做法是先锁定完整图当前Y轴范围，再只设置X轴min/max到中间约N小时。
             self.driver.execute_script("""
                 var chart = echarts.getInstanceByDom(document.getElementById('chart-container'));
                 if (!chart) return;
                 var zoomHours = arguments[0];
-                var zoomStart = 0;
-                var zoomEnd = 100;
                 var option = chart.getOption();
+                var xMin = null;
+                var xMax = null;
+
+                var lockedYAxis = [];
+                (option.yAxis || []).forEach(function(axisOpt, axisIndex) {
+                    var lockedAxis = Object.assign({}, axisOpt);
+                    try {
+                        var axisModel = chart.getModel().getComponent('yAxis', axisIndex);
+                        var extent = axisModel.axis.scale.getExtent();
+                        if (extent && extent.length >= 2 && isFinite(extent[0]) && isFinite(extent[1])) {
+                            lockedAxis.min = extent[0];
+                            lockedAxis.max = extent[1];
+                            lockedAxis.scale = false;
+                        }
+                    } catch (e) {}
+                    lockedYAxis.push(lockedAxis);
+                });
+
                 if (zoomHours && zoomHours > 0) {
                     var minTs = Infinity;
                     var maxTs = -Infinity;
@@ -635,35 +818,34 @@ class ChartScreenshot:
                         var zoomMs = zoomHours * 60 * 60 * 1000;
                         if (range > zoomMs) {
                             var center = minTs + range / 2;
-                            var startTs = center - zoomMs / 2;
-                            var endTs = center + zoomMs / 2;
-                            zoomStart = Math.max(0, (startTs - minTs) / range * 100);
-                            zoomEnd = Math.min(100, (endTs - minTs) / range * 100);
+                            xMin = center - zoomMs / 2;
+                            xMax = center + zoomMs / 2;
                         }
                     }
                 }
+
+                var nextXAxis = {
+                    axisLabel: {
+                        rotate: 0,
+                        fontSize: 15,
+                        lineHeight: 22,
+                        formatter: '{yyyy}-{MM}-{dd}\\n{HH}:{mm}',
+                        hideOverlap: true
+                    }
+                };
+                if (xMin !== null && xMax !== null) {
+                    nextXAxis.min = xMin;
+                    nextXAxis.max = xMax;
+                }
+
                 chart.setOption({
                     height: null,
-                    dataZoom: [{
-                        show: false,
-                        xAxisIndex: [0],
-                        filterMode: 'none',
-                        start: zoomStart,
-                        end: zoomEnd
-                    }],
+                    dataZoom: [],
                     toolbox: {show: false},
                     grid: {bottom: 100},
-                    xAxis: {
-                        axisLabel: {
-                            rotate: 0,
-                            fontSize: 15,
-                            lineHeight: 22,
-                            formatter: '{yyyy}-{MM}-{dd}\\n{HH}:{mm}',
-                            hideOverlap: true
-                        }
-                    }
+                    xAxis: nextXAxis,
+                    yAxis: lockedYAxis
                 }, {replaceMerge: ['dataZoom']});
-                chart.dispatchAction({ type: 'dataZoom', dataZoomIndex: 0, start: zoomStart, end: zoomEnd });
                 var dom = chart.getDom();
                 dom.style.width  = '1920px';
                 dom.style.height = '1200px';
@@ -732,7 +914,16 @@ class ChartScreenshot:
             self.driver = None
 
 
-def generate_report(all_results: Dict, output_dir: Path, voltage_segments: List[float] = None):
+def generate_report(
+    all_results: Dict,
+    output_dir: Path,
+    voltage_segments: List[float] = None,
+    compare_threshold: float = COMPARE_DEVIATION_THRESHOLD,
+    compare_enabled: bool = True,
+    limit_enabled: bool = False,
+    work_limits: Optional[Dict] = None,
+    sleep_limits: Optional[Dict] = None,
+):
     """生成Excel汇总报告"""
     if voltage_segments is None:
         voltage_segments = VOLTAGE_SEGMENTS
@@ -783,19 +974,38 @@ def generate_report(all_results: Dict, output_dir: Path, voltage_segments: List[
             sleep_avg_col.append("N/A")
     work_df['休眠电流(14V)'] = sleep_col
     work_df['休眠电流(14V)平均'] = sleep_avg_col
+    alert_cells = (
+        collect_report_alert_cells(all_results, voltage_segments, compare_threshold)
+        if compare_enabled else set()
+    )
+    if limit_enabled:
+        alert_cells.update(collect_limit_alert_cells(all_results, voltage_segments, work_limits, sleep_limits))
+
+    def apply_report_style(writer):
+        from openpyxl.styles import Font, PatternFill
+
+        arial_font = Font(name='Arial', size=9)
+        alert_fill = PatternFill(fill_type='solid', fgColor='FFC7CE')
+        alert_font = Font(name='Arial', size=9, color='9C0006')
+
+        worksheet = writer.sheets['工作模式']
+        for row in worksheet.iter_rows():
+            for cell in row:
+                cell.font = arial_font
+        for column_cells in worksheet.columns:
+            max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+            worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 10), 24)
+
+        for row_idx, col_idx in alert_cells:
+            cell = worksheet.cell(row=row_idx, column=col_idx)
+            cell.fill = alert_fill
+            cell.font = alert_font
 
     output_file = output_dir / "电压电流分析汇总.xlsx"
     try:
         with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
             work_df.to_excel(writer, sheet_name='工作模式', index=False)
-            # 设置字体为Arial 9
-            workbook = writer.book
-            worksheet = writer.sheets['工作模式']
-            from openpyxl.styles import Font
-            arial_font = Font(name='Arial', size=9)
-            for row in worksheet.iter_rows():
-                for cell in row:
-                    cell.font = arial_font
+            apply_report_style(writer)
         logger.info(f"汇总报告已保存: {output_file}")
     except PermissionError:
         # 文件被占用时，尝试用带时间戳的文件名
@@ -804,20 +1014,15 @@ def generate_report(all_results: Dict, output_dir: Path, voltage_segments: List[
         alt_file = output_dir / f"电压电流分析汇总_{ts}.xlsx"
         with pd.ExcelWriter(alt_file, engine='openpyxl') as writer:
             work_df.to_excel(writer, sheet_name='工作模式', index=False)
-            # 设置字体为Arial 9
-            workbook = writer.book
-            worksheet = writer.sheets['工作模式']
-            from openpyxl.styles import Font
-            arial_font = Font(name='Arial', size=9)
-            for row in worksheet.iter_rows():
-                for cell in row:
-                    cell.font = arial_font
+            apply_report_style(writer)
         logger.warning(f"原文件被占用，已保存到: {alt_file}")
 
     print("\n" + "=" * 80)
     print("工作模式数据汇总:")
     print("=" * 80)
     print(work_df.to_string(index=False))
+    if compare_enabled:
+        print(f"\n异常标红单元格数: {len(alert_cells)}")
 
     return output_file
 

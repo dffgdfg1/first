@@ -12,8 +12,9 @@ from pathlib import Path
 
 from analyze_voltage_current import (
     VOLTAGE_SEGMENTS, VOLTAGE_TOLERANCE, MIN_STABLE_POINTS,
-    OUTLIER_STD_FACTOR, PROJECT_CONFIGS, VoltageCurrentAnalyzer, ChartScreenshot,
-    generate_report,
+    OUTLIER_STD_FACTOR, PROJECT_CONFIGS, COMPARE_DEVIATION_THRESHOLD,
+    VoltageCurrentAnalyzer, ChartScreenshot, collect_report_alert_cells,
+    collect_limit_alert_cells, generate_report,
 )
 
 
@@ -39,8 +40,8 @@ class AnalyzeGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("电压电流曲线自动化分析")
-        self.root.geometry("820x660")
-        self.root.minsize(720, 560)
+        self.root.geometry("1120x720")
+        self.root.minsize(1080, 680)
         self.running = False
         self.thread = None
         self._last_folder_list = []  # 保存上一轮文件夹列表
@@ -75,6 +76,18 @@ class AnalyzeGUI:
         self.var_outlier = tk.DoubleVar(value=OUTLIER_STD_FACTOR)  # 默认3.5，更宽松
         self.var_screenshot = tk.BooleanVar(value=True)
         self.var_partial_screenshot = tk.BooleanVar(value=False)
+        self.var_work_partial_hours = tk.DoubleVar(value=2.0)
+        self.var_sleep_partial_hours = tk.DoubleVar(value=2.0)
+        self.var_compare_enabled = tk.BooleanVar(value=True)
+        self.var_compare_threshold = tk.DoubleVar(value=COMPARE_DEVIATION_THRESHOLD)
+        self.var_limit_enabled = tk.BooleanVar(value=False)
+        self.var_work_min_limit = tk.StringVar(value="")
+        self.var_work_max_limit = tk.StringVar(value="")
+        self.var_sleep_min_limit = tk.StringVar(value="0")
+        self.var_sleep_max_limit = tk.StringVar(value="100")
+        self.var_limit_rt = tk.BooleanVar(value=True)
+        self.var_limit_tmax = tk.BooleanVar(value=False)
+        self.var_limit_tmin = tk.BooleanVar(value=True)
         self.var_project = tk.StringVar(value='D2J')
 
         # 参数说明：电压容差(V) - 匹配目标电压时的允许偏差范围
@@ -93,20 +106,64 @@ class AnalyzeGUI:
             # 添加工具提示（鼠标悬停显示）
             self._create_tooltip(entry, tooltip)
 
-        ttk.Checkbutton(param_frame, text="截取图表截图", variable=self.var_screenshot).grid(row=0, column=6, padx=8)
-        ttk.Checkbutton(param_frame, text="额外生成局部截图", variable=self.var_partial_screenshot).grid(row=0, column=7, padx=8)
+        ttk.Checkbutton(param_frame, text="截取图表截图", variable=self.var_screenshot).grid(row=0, column=6, sticky=tk.W, padx=(6, 2))
+        ttk.Checkbutton(param_frame, text="额外生成局部截图", variable=self.var_partial_screenshot).grid(row=0, column=7, sticky=tk.W, padx=(2, 2))
 
         # 批量分析输出路径选项
         self.var_output_to_source = tk.BooleanVar(value=True)
-        ttk.Checkbutton(param_frame, text="输出到源文件夹", variable=self.var_output_to_source).grid(row=0, column=8, padx=8)
+        ttk.Checkbutton(param_frame, text="输出到源文件夹", variable=self.var_output_to_source).grid(row=0, column=8, sticky=tk.W, padx=(2, 0))
+
+        ttk.Label(param_frame, text="工作局部时长(h):").grid(row=1, column=6, sticky=tk.E, padx=(6, 2), pady=(4, 0))
+        work_hours_entry = ttk.Entry(param_frame, textvariable=self.var_work_partial_hours, width=6)
+        work_hours_entry.grid(row=1, column=7, sticky=tk.W, pady=(4, 0))
+        self._create_tooltip(work_hours_entry, "工作模式局部截图截取中间多少小时")
+
+        ttk.Label(param_frame, text="休眠局部时长(h):").grid(row=1, column=8, sticky=tk.E, padx=(6, 2), pady=(4, 0))
+        sleep_hours_entry = ttk.Entry(param_frame, textvariable=self.var_sleep_partial_hours, width=6)
+        sleep_hours_entry.grid(row=1, column=9, sticky=tk.W, pady=(4, 0))
+        self._create_tooltip(sleep_hours_entry, "休眠模式局部截图截取中间多少小时")
+
+        ttk.Label(param_frame, text="比对阈值(%):").grid(row=2, column=6, sticky=tk.E, padx=(6, 2), pady=(4, 0))
+        compare_entry = ttk.Entry(param_frame, textvariable=self.var_compare_threshold, width=6)
+        compare_entry.grid(row=2, column=7, sticky=tk.W, pady=(4, 0))
+        self._create_tooltip(compare_entry, "开启样品比对后，单台样机偏离其它样机超过该百分比时标红")
+        ttk.Checkbutton(param_frame, text="启用样品比对", variable=self.var_compare_enabled).grid(
+            row=2, column=8, columnspan=2, sticky=tk.W, padx=(6, 0), pady=(4, 0)
+        )
+
+        ttk.Checkbutton(param_frame, text="启用上下限", variable=self.var_limit_enabled).grid(
+            row=3, column=0, columnspan=2, sticky=tk.W, pady=(4, 0)
+        )
+        ttk.Label(param_frame, text="工作A:").grid(row=3, column=2, sticky=tk.E, padx=(8, 2), pady=(4, 0))
+        work_min_entry = ttk.Entry(param_frame, textvariable=self.var_work_min_limit, width=6)
+        work_min_entry.grid(row=3, column=3, sticky=tk.W, pady=(4, 0))
+        ttk.Label(param_frame, text="-").grid(row=3, column=4, sticky=tk.W, pady=(4, 0))
+        work_max_entry = ttk.Entry(param_frame, textvariable=self.var_work_max_limit, width=6)
+        work_max_entry.grid(row=3, column=5, sticky=tk.W, pady=(4, 0))
+        self._create_tooltip(work_min_entry, "工作模式电流最小值，单位A；留空不检查下限")
+        self._create_tooltip(work_max_entry, "工作模式电流最大值，单位A；留空不检查上限")
+
+        ttk.Label(param_frame, text="休眠uA:").grid(row=3, column=6, sticky=tk.E, padx=(8, 2), pady=(4, 0))
+        sleep_min_entry = ttk.Entry(param_frame, textvariable=self.var_sleep_min_limit, width=6)
+        sleep_min_entry.grid(row=3, column=7, sticky=tk.W, pady=(4, 0))
+        ttk.Label(param_frame, text="-").grid(row=3, column=8, sticky=tk.W, pady=(4, 0))
+        sleep_max_entry = ttk.Entry(param_frame, textvariable=self.var_sleep_max_limit, width=6)
+        sleep_max_entry.grid(row=3, column=9, sticky=tk.W, pady=(4, 0))
+        self._create_tooltip(sleep_min_entry, "休眠电流最小值，单位uA，默认0")
+        self._create_tooltip(sleep_max_entry, "休眠电流最大值，单位uA，默认100")
+
+        ttk.Label(param_frame, text="P03检查温度:").grid(row=4, column=0, sticky=tk.W, pady=(4, 0))
+        ttk.Checkbutton(param_frame, text="Rt", variable=self.var_limit_rt).grid(row=4, column=1, sticky=tk.W, pady=(4, 0))
+        ttk.Checkbutton(param_frame, text="Tmax", variable=self.var_limit_tmax).grid(row=4, column=2, sticky=tk.W, pady=(4, 0))
+        ttk.Checkbutton(param_frame, text="Tmin", variable=self.var_limit_tmin).grid(row=4, column=3, sticky=tk.W, pady=(4, 0))
 
         # 项目选择
         ttk.Label(param_frame, text="项目类型:").grid(row=1, column=0, sticky=tk.W, padx=(0, 2), pady=(4, 0))
         project_combo = ttk.Combobox(param_frame, textvariable=self.var_project, values=['D2J', 'G2V'],
                                       state='readonly', width=10)
         project_combo.grid(row=1, column=1, sticky=tk.W, pady=(4, 0))
-        ttk.Label(param_frame, text="D2J: 6.5V/9V/14V/16V/18V  |  G2V: 9V/14V/16V",
-                  font=("", 8), foreground="gray").grid(row=1, column=2, columnspan=5, sticky=tk.W, padx=8, pady=(4, 0))
+        ttk.Label(param_frame, text="D2J: 6.5/9/14/16/18V | G2V: 9/14/16V",
+                  font=("", 8), foreground="gray").grid(row=1, column=2, columnspan=4, sticky=tk.W, padx=8, pady=(4, 0))
 
         # === 模式选择区 ===
         mode_frame = ttk.LabelFrame(self.root, text="分析模式", padding=8)
@@ -198,6 +255,66 @@ class AnalyzeGUI:
 
         widget.bind("<Enter>", on_enter)
         widget.bind("<Leave>", on_leave)
+
+    def _get_partial_hours(self):
+        """读取局部截图时长，输入异常时回退到默认2小时"""
+        try:
+            work_hours = float(self.var_work_partial_hours.get())
+        except (tk.TclError, ValueError):
+            work_hours = 2.0
+            self.var_work_partial_hours.set(work_hours)
+
+        try:
+            sleep_hours = float(self.var_sleep_partial_hours.get())
+        except (tk.TclError, ValueError):
+            sleep_hours = 2.0
+            self.var_sleep_partial_hours.set(sleep_hours)
+
+        return max(0.1, work_hours), max(0.1, sleep_hours)
+
+    def _get_compare_threshold(self):
+        """读取样机比对偏差阈值，输入异常时回退到默认20%。"""
+        try:
+            threshold = float(self.var_compare_threshold.get())
+        except (tk.TclError, ValueError):
+            threshold = COMPARE_DEVIATION_THRESHOLD
+            self.var_compare_threshold.set(threshold)
+
+        return max(0.0, threshold)
+
+    def _read_optional_float(self, var, default=None):
+        value = str(var.get()).strip()
+        if value == "":
+            return default
+        try:
+            return float(value)
+        except (tk.TclError, ValueError):
+            var.set("" if default is None else str(default))
+            return default
+
+    def _get_limit_config(self):
+        """读取用户自定义上下限配置。工作单位A，休眠单位uA。"""
+        return {
+            'enabled': self.var_limit_enabled.get(),
+            'work': {
+                'min': self._read_optional_float(self.var_work_min_limit),
+                'max': self._read_optional_float(self.var_work_max_limit),
+            },
+            'sleep': {
+                'min': self._read_optional_float(self.var_sleep_min_limit, 0.0),
+                'max': self._read_optional_float(self.var_sleep_max_limit, 100.0),
+            },
+        }
+
+    def _get_p03_limit_temps(self):
+        selected = set()
+        if self.var_limit_rt.get():
+            selected.add('Rt')
+        if self.var_limit_tmax.get():
+            selected.add('Tmax')
+        if self.var_limit_tmin.get():
+            selected.add('Tmin')
+        return selected
 
     # ── 日志 ──────────────────────────────────────────────
     def _setup_logging(self):
@@ -394,6 +511,7 @@ class AnalyzeGUI:
         sleep_screenshot_dir = output_dir / "休眠电流截图"
         sleep_screenshot_dir.mkdir(parents=True, exist_ok=True)
         do_partial_screenshot = do_screenshot and self.var_partial_screenshot.get()
+        work_partial_hours, sleep_partial_hours = self._get_partial_hours()
         work_partial_screenshot_dir = output_dir / "工作模式局部截图"
         sleep_partial_screenshot_dir = output_dir / "休眠模式局部截图"
         if do_partial_screenshot:
@@ -495,7 +613,7 @@ class AnalyzeGUI:
                     if do_partial_screenshot:
                         work_partial_img = work_partial_screenshot_dir / f"{i}号样机工作电压电流局部.png"
                         self._log(f"    截取工作模式局部图表: {work_file.name}")
-                        screenshot.capture(str(work_file), str(work_partial_img), zoom_hours=2)
+                        screenshot.capture(str(work_file), str(work_partial_img), zoom_hours=work_partial_hours)
                 if sleep_file:
                     sleep_img = sleep_screenshot_dir / f"{i}号样机休眠电流.png"
                     self._log(f"    截取休眠模式图表: {sleep_file.name}")
@@ -503,7 +621,7 @@ class AnalyzeGUI:
                     if do_partial_screenshot:
                         sleep_partial_img = sleep_partial_screenshot_dir / f"{i}号样机休眠电流局部.png"
                         self._log(f"    截取休眠模式局部图表: {sleep_file.name}")
-                        screenshot.capture(str(sleep_file), str(sleep_partial_img), zoom_hours=2)
+                        screenshot.capture(str(sleep_file), str(sleep_partial_img), zoom_hours=sleep_partial_hours)
 
         # 最后一个文件夹处理完后关闭浏览器
         if folder_idx == total_folders and hasattr(self, 'screenshot_instance'):
@@ -515,7 +633,13 @@ class AnalyzeGUI:
             self._log(f"\n  生成汇总报告...")
             project_type = self.var_project.get()
             voltage_segments = PROJECT_CONFIGS[project_type]['voltage_segments']
-            generate_report(all_results, output_dir, voltage_segments)
+            compare_threshold = self._get_compare_threshold()
+            limit_config = self._get_limit_config()
+            generate_report(
+                all_results, output_dir, voltage_segments, compare_threshold,
+                self.var_compare_enabled.get(), limit_config['enabled'],
+                limit_config['work'], limit_config['sleep']
+            )
             self._log(f"  ✓ 报告已保存到: {output_dir}")
 
     def _do_analysis(self, base_dir: Path, output_dir: Path):
@@ -529,6 +653,7 @@ class AnalyzeGUI:
         sleep_screenshot_dir = output_dir / "休眠电流截图"
         sleep_screenshot_dir.mkdir(parents=True, exist_ok=True)
         do_partial_screenshot = do_screenshot and self.var_partial_screenshot.get()
+        work_partial_hours, sleep_partial_hours = self._get_partial_hours()
         work_partial_screenshot_dir = output_dir / "工作模式局部截图"
         sleep_partial_screenshot_dir = output_dir / "休眠模式局部截图"
         if do_partial_screenshot:
@@ -620,7 +745,7 @@ class AnalyzeGUI:
                     if do_partial_screenshot:
                         work_partial_img = work_partial_screenshot_dir / f"{i}号样机工作电压电流局部.png"
                         self._log(f"[{i}号样机] 截取工作模式局部图表: {work_file.name}")
-                        screenshot.capture(str(work_file), str(work_partial_img), zoom_hours=2)
+                        screenshot.capture(str(work_file), str(work_partial_img), zoom_hours=work_partial_hours)
                 if sleep_file:
                     sleep_img = sleep_screenshot_dir / f"{i}号样机休眠电流.png"
                     self._log(f"[{i}号样机] 截取休眠模式图表: {sleep_file.name}")
@@ -628,7 +753,7 @@ class AnalyzeGUI:
                     if do_partial_screenshot:
                         sleep_partial_img = sleep_partial_screenshot_dir / f"{i}号样机休眠电流局部.png"
                         self._log(f"[{i}号样机] 截取休眠模式局部图表: {sleep_file.name}")
-                        screenshot.capture(str(sleep_file), str(sleep_partial_img), zoom_hours=2)
+                        screenshot.capture(str(sleep_file), str(sleep_partial_img), zoom_hours=sleep_partial_hours)
 
         if screenshot and browser_ok:
             screenshot.close()
@@ -638,7 +763,13 @@ class AnalyzeGUI:
             self._log("生成汇总报告…")
             project_type = self.var_project.get()
             voltage_segments = PROJECT_CONFIGS[project_type]['voltage_segments']
-            generate_report(all_results, output_dir, voltage_segments)
+            compare_threshold = self._get_compare_threshold()
+            limit_config = self._get_limit_config()
+            generate_report(
+                all_results, output_dir, voltage_segments, compare_threshold,
+                self.var_compare_enabled.get(), limit_config['enabled'],
+                limit_config['work'], limit_config['sleep']
+            )
             self._log(f"报告已保存到: {output_dir}")
 
     def _run_p03_analysis(self, folder_list, output_dir: Path):
@@ -730,6 +861,7 @@ class AnalyzeGUI:
         sleep_screenshot_dir = output_dir / "休眠电流截图"
         sleep_screenshot_dir.mkdir(parents=True, exist_ok=True)
         do_partial_screenshot = do_screenshot and self.var_partial_screenshot.get()
+        work_partial_hours, sleep_partial_hours = self._get_partial_hours()
         work_partial_screenshot_dir = output_dir / "工作模式局部截图"
         sleep_partial_screenshot_dir = output_dir / "休眠模式局部截图"
         if do_partial_screenshot:
@@ -815,7 +947,7 @@ class AnalyzeGUI:
                     if do_partial_screenshot:
                         work_partial_img = work_partial_screenshot_dir / f"{i}号样机工作电压电流局部.png"
                         self._log(f"      截取工作模式局部图表: {work_file.name}")
-                        screenshot.capture(str(work_file), str(work_partial_img), zoom_hours=2)
+                        screenshot.capture(str(work_file), str(work_partial_img), zoom_hours=work_partial_hours)
                 if sleep_file:
                     sleep_img = sleep_screenshot_dir / f"{i}号样机休眠电流.png"
                     self._log(f"      截取休眠模式图表: {sleep_file.name}")
@@ -823,7 +955,7 @@ class AnalyzeGUI:
                     if do_partial_screenshot:
                         sleep_partial_img = sleep_partial_screenshot_dir / f"{i}号样机休眠电流局部.png"
                         self._log(f"      截取休眠模式局部图表: {sleep_file.name}")
-                        screenshot.capture(str(sleep_file), str(sleep_partial_img), zoom_hours=2)
+                        screenshot.capture(str(sleep_file), str(sleep_partial_img), zoom_hours=sleep_partial_hours)
 
         # 最后一个文件夹处理完后关闭浏览器
         if folder_idx == total_folders and hasattr(self, 'screenshot_instance'):
@@ -835,10 +967,14 @@ class AnalyzeGUI:
     def _generate_p03_report(self, all_temp_results: dict, output_dir: Path):
         """生成P03合并Excel报告，将Rt/Tmax/Tmin数据整合到一个表"""
         import pandas as pd
-        from openpyxl.styles import Font
+        from openpyxl.styles import Font, PatternFill
 
         project_type = self.var_project.get()
         voltage_segments = PROJECT_CONFIGS[project_type]['voltage_segments']
+        compare_threshold = self._get_compare_threshold()
+        compare_enabled = self.var_compare_enabled.get()
+        limit_config = self._get_limit_config()
+        limit_temps = self._get_p03_limit_temps()
 
         rows = []
         for temp_name in ['Rt', 'Tmax', 'Tmin']:
@@ -884,15 +1020,58 @@ class AnalyzeGUI:
 
         df = pd.DataFrame(rows)
 
+        alert_cells = set()
+        if compare_enabled:
+            row_offset = 0
+            for temp_name in ['Rt', 'Tmax', 'Tmin']:
+                if temp_name not in all_temp_results:
+                    continue
+                temp_alert_cells = collect_report_alert_cells(
+                    all_temp_results[temp_name], voltage_segments, compare_threshold
+                )
+                for row_idx, col_idx in temp_alert_cells:
+                    alert_cells.add((row_idx + row_offset, col_idx + 1))
+                row_offset += 6
+
+        if limit_config['enabled']:
+            row_offset = 0
+            for temp_name in ['Rt', 'Tmax', 'Tmin']:
+                if temp_name not in all_temp_results:
+                    continue
+                if temp_name not in limit_temps:
+                    row_offset += 6
+                    continue
+                temp_limit_cells = collect_limit_alert_cells(
+                    all_temp_results[temp_name], voltage_segments,
+                    limit_config['work'], limit_config['sleep']
+                )
+                for row_idx, col_idx in temp_limit_cells:
+                    alert_cells.add((row_idx + row_offset, col_idx + 1))
+                row_offset += 6
+
+        def apply_p03_style(writer):
+            arial_font = Font(name='Arial', size=9)
+            alert_fill = PatternFill(fill_type='solid', fgColor='FFC7CE')
+            alert_font = Font(name='Arial', size=9, color='9C0006')
+
+            worksheet = writer.sheets['工作模式']
+            for row in worksheet.iter_rows():
+                for cell in row:
+                    cell.font = arial_font
+            for column_cells in worksheet.columns:
+                max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
+                worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 10), 24)
+
+            for row_idx, col_idx in alert_cells:
+                cell = worksheet.cell(row=row_idx, column=col_idx)
+                cell.fill = alert_fill
+                cell.font = alert_font
+
         output_file = output_dir / "P03电压电流分析汇总.xlsx"
         try:
             with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
                 df.to_excel(writer, sheet_name='工作模式', index=False)
-                worksheet = writer.sheets['工作模式']
-                arial_font = Font(name='Arial', size=9)
-                for row in worksheet.iter_rows():
-                    for cell in row:
-                        cell.font = arial_font
+                apply_p03_style(writer)
             self._log(f"  ✓ P03汇总报告已保存: {output_file}")
         except PermissionError:
             import datetime
@@ -900,11 +1079,7 @@ class AnalyzeGUI:
             alt_file = output_dir / f"P03电压电流分析汇总_{ts}.xlsx"
             with pd.ExcelWriter(alt_file, engine='openpyxl') as writer:
                 df.to_excel(writer, sheet_name='工作模式', index=False)
-                worksheet = writer.sheets['工作模式']
-                arial_font = Font(name='Arial', size=9)
-                for row in worksheet.iter_rows():
-                    for cell in row:
-                        cell.font = arial_font
+                apply_p03_style(writer)
             self._log(f"  ⚠ 原文件被占用，已保存到: {alt_file}")
 
     def _on_finished(self):

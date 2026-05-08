@@ -19,6 +19,7 @@ build/
 
 # Claude local settings
 .claude/settings.local.json
+.claude/settings.json
 
 # Output files
 output/

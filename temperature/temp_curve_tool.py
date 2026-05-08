@@ -249,6 +249,30 @@ def fit_to_ref(ref: pd.Series, target: pd.Series,
     return pd.Series(result, index=target_c.index)
 
 
+# ── 自定义工具栏 ──────────────────────────────────────────────────────────────
+
+class CustomNavigationToolbar(NavigationToolbar2Tk):
+    """自定义工具栏，修改保存图片的默认路径"""
+
+    def __init__(self, canvas, window, app):
+        self.app = app  # 保存 App 实例的引用
+        super().__init__(canvas, window)
+
+    def save_figure(self, *args):
+        """重写保存方法，使用最后加载文件的目录作为默认路径"""
+        # 临时修改 matplotlib 的默认保存目录
+        import os
+        if self.app._last_dir:
+            original_dir = os.getcwd()
+            os.chdir(self.app._last_dir)
+            try:
+                super().save_figure(*args)
+            finally:
+                os.chdir(original_dir)
+        else:
+            super().save_figure(*args)
+
+
 # ── 主应用 ────────────────────────────────────────────────────────────────────
 
 class App(tk.Tk):
@@ -261,7 +285,9 @@ class App(tk.Tk):
 
         self.df_s1:  pd.DataFrame = None
         self.df_box: pd.DataFrame = None
+        self._temp_dir: str = ""
         self._first_dir: str = ""   # 首个加载文件的目录
+        self._last_dir: str = ""    # 最后加载文件的目录（用于保存图片）
 
         # 控件变量
         self.path_s1   = tk.StringVar()
@@ -494,6 +520,8 @@ class App(tk.Tk):
                  font=("Microsoft YaHei", 9)).pack(side="left")
         tk.Entry(ry, textvariable=self.y_min_span, width=5).pack(side="left")
         tk.Label(ry, text="°C", bg="#F0F0F0").pack(side="left")
+        # 绑定自动重绘
+        self.y_min_span.trace_add("write", lambda *_: self._redraw())
 
         # ── 导出 ─────────────────────────────────────────────────────
         sf = self._sec(parent, "导出")
@@ -524,7 +552,7 @@ class App(tk.Tk):
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         tb_frame = tk.Frame(parent, bg="#FFFFFF")
         tb_frame.pack(fill="x")
-        self.toolbar = NavigationToolbar2Tk(self.canvas, tb_frame)
+        self.toolbar = CustomNavigationToolbar(self.canvas, tb_frame, self)
         self.toolbar.update()
 
     # ── 文件加载 ──────────────────────────────────────────────────────────────
@@ -546,6 +574,8 @@ class App(tk.Tk):
                 df = load_datafile(path)
                 df = rename_sensor_cols(df)   # 通道1 → Temperature_S1
             self.df_s1 = df
+            # 更新最后加载文件的目录
+            self._last_dir = str(Path(path).parent)
             if not self._first_dir:
                 self._first_dir = str(Path(path).parent)
             nc = numeric_cols(df)
@@ -572,6 +602,9 @@ class App(tk.Tk):
             df = load_datafile(path)
             df = rename_box_cols(df)   # 温度_PV→Temperature_PV, 温度_SP→Temperature_SV, 湿度_PV→Humidity
             self.df_box = df
+            # 更新最后加载文件的目录
+            self._last_dir = str(Path(path).parent)
+            self._temp_dir = str(Path(path).parent)
             if not self._first_dir:
                 self._first_dir = str(Path(path).parent)
             nc   = numeric_cols(df)
@@ -796,7 +829,7 @@ class App(tk.Tk):
     def _export_png(self):
         p = filedialog.asksaveasfilename(
             title="保存图表", defaultextension=".png",
-            initialdir=self._first_dir or None,
+            initialdir=self._last_dir or self._first_dir or None,
             filetypes=[("PNG 图片", "*.png"), ("SVG 矢量", "*.svg")])
         if not p:
             return
