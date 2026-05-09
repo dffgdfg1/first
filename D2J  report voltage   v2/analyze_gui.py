@@ -80,7 +80,7 @@ class AnalyzeGUI:
         self.var_sleep_partial_hours = tk.DoubleVar(value=2.0)
         self.var_compare_enabled = tk.BooleanVar(value=True)
         self.var_compare_threshold = tk.DoubleVar(value=COMPARE_DEVIATION_THRESHOLD)
-        self.var_limit_enabled = tk.BooleanVar(value=False)
+        self.var_limit_enabled = tk.BooleanVar(value=True)
         self.var_work_min_limit = tk.StringVar(value="")
         self.var_work_max_limit = tk.StringVar(value="")
         self.var_sleep_min_limit = tk.StringVar(value="0")
