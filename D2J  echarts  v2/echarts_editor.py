@@ -94,6 +94,7 @@ class EChartsEditor:
         ttk.Button(toolbar_row2, text="批生成休眠模式", command=lambda: self.batch_generate("sleep")).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar_row2, text="一键批生成", command=self.one_click_batch_generate).pack(side=tk.LEFT, padx=5)
         ttk.Button(toolbar_row2, text="填充缺失数据", command=self.fill_missing_data).pack(side=tk.LEFT, padx=5)
+        ttk.Button(toolbar_row2, text="真实数据调整", command=self.real_data_adjust).pack(side=tk.LEFT, padx=5)
 
         # 第三行：搜索功能和退出按钮
         toolbar_row3 = ttk.Frame(toolbar_container)
@@ -6493,6 +6494,452 @@ class EChartsEditor:
 </html>"""
 
         return html_template
+
+
+    def _scan_html_directory(self, root_dir):
+        """扫描根目录下的子目录，识别工作模式和休眠模式文件"""
+        results = []
+        try:
+            items = sorted(os.listdir(root_dir))
+            for item in items:
+                item_path = os.path.join(root_dir, item)
+                if os.path.isdir(item_path):
+                    work_file = None
+                    sleep_file = None
+                    for f in os.listdir(item_path):
+                        if f.endswith('.html'):
+                            name_no_ext = os.path.splitext(f)[0]
+                            if name_no_ext.lower().endswith('-l'):
+                                sleep_file = os.path.join(item_path, f)
+                            else:
+                                work_file = os.path.join(item_path, f)
+                    if work_file or sleep_file:
+                        results.append({
+                            'dir': item,
+                            'work': work_file,
+                            'sleep': sleep_file
+                        })
+        except Exception as e:
+            messagebox.showerror("错误", f"扫描目录失败：{str(e)}")
+        return results
+
+    def real_data_adjust(self):
+        """真实数据调整 - 基于真实HTML数据统一施加调整"""
+        adjust_window = tk.Toplevel(self.root)
+        adjust_window.title("真实数据调整")
+        adjust_window.geometry("850x750")
+        adjust_window.minsize(800, 720)
+
+        btn_frame = ttk.Frame(adjust_window)
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+
+        main_frame = ttk.Frame(adjust_window, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 加载保存的参数
+        config_file = os.path.join(os.path.dirname(__file__), 'real_data_adjust_config.json')
+        saved_params = {}
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    saved_params = json.load(f)
+            except:
+                pass
+
+        # 多目录上传区域
+        dir_frame = ttk.LabelFrame(main_frame, text="一键上传（支持多个HTML根目录，每个目录自动扫描1-6号样品）", padding=10)
+        dir_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 目录列表和按钮
+        dir_btn_row = ttk.Frame(dir_frame)
+        dir_btn_row.pack(fill=tk.X)
+        ttk.Button(dir_btn_row, text="添加目录", command=lambda: add_directory(), width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(dir_btn_row, text="删除选中", command=lambda: remove_selected_dir(), width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(dir_btn_row, text="清空", command=lambda: clear_all_dirs(), width=8).pack(side=tk.LEFT, padx=2)
+
+        # 已添加的目录和扫描结果列表
+        file_list_frame = ttk.Frame(dir_frame)
+        file_list_frame.pack(fill=tk.X, pady=(8, 0))
+        file_listbox = tk.Listbox(file_list_frame, height=8, width=85)
+        file_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        file_scrollbar = ttk.Scrollbar(file_list_frame, orient="vertical", command=file_listbox.yview)
+        file_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        file_listbox.configure(yscrollcommand=file_scrollbar.set)
+
+        scan_result_var = tk.StringVar(value="")
+        scan_label = ttk.Label(dir_frame, textvariable=scan_result_var, foreground='gray')
+        scan_label.pack(anchor=tk.W, pady=(4, 0))
+
+        # 存储多个目录的扫描结果: [{root_dir, scanned_files, output_dir}, ...]
+        all_dirs_data = []
+
+        def refresh_listbox():
+            file_listbox.delete(0, tk.END)
+            total_work = 0
+            total_sleep = 0
+            for dir_data in all_dirs_data:
+                root_dir = dir_data['root_dir']
+                file_listbox.insert(tk.END, f"--- {root_dir} ---")
+                for item in dir_data['scanned_files']:
+                    if item['work']:
+                        file_listbox.insert(tk.END, f"    [样品{item['dir']}] 工作模式: {os.path.basename(item['work'])}")
+                        total_work += 1
+                    if item['sleep']:
+                        file_listbox.insert(tk.END, f"    [样品{item['dir']}] 休眠模式: {os.path.basename(item['sleep'])}")
+                        total_sleep += 1
+            total_dirs = len(all_dirs_data)
+            scan_result_var.set(
+                f"共 {total_dirs} 个目录，工作模式 {total_work} 个，休眠模式 {total_sleep} 个"
+            )
+            scan_label.config(foreground='blue' if total_dirs > 0 else 'gray')
+
+        def add_directory():
+            directory = filedialog.askdirectory(title="选择HTML根目录（包含1-6子目录）", parent=adjust_window)
+            if not directory:
+                return
+            # 检查是否已添加
+            for d in all_dirs_data:
+                if os.path.normpath(d['root_dir']) == os.path.normpath(directory):
+                    messagebox.showwarning("提示", "该目录已添加！", parent=adjust_window)
+                    return
+            results = self._scan_html_directory(directory)
+            if not results:
+                messagebox.showwarning("提示", f"该目录下未找到有效的样品文件：\n{directory}", parent=adjust_window)
+                return
+            parent = os.path.dirname(directory)
+            output_dir = os.path.join(parent, "html改")
+            all_dirs_data.append({
+                'root_dir': directory,
+                'scanned_files': results,
+                'output_dir': output_dir,
+            })
+            refresh_listbox()
+
+        def remove_selected_dir():
+            sel = file_listbox.curselection()
+            if not sel:
+                return
+            # 找到选中行属于哪个目录
+            idx = sel[0]
+            current_line = 0
+            for i, dir_data in enumerate(all_dirs_data):
+                lines_for_this = 1 + sum(1 for item in dir_data['scanned_files'] if item['work']) + \
+                                 sum(1 for item in dir_data['scanned_files'] if item['sleep'])
+                if idx < current_line + lines_for_this:
+                    del all_dirs_data[i]
+                    refresh_listbox()
+                    return
+                current_line += lines_for_this
+
+        def clear_all_dirs():
+            all_dirs_data.clear()
+            refresh_listbox()
+
+        # 模式选择
+        mode_frame = ttk.LabelFrame(main_frame, text="处理模式", padding=10)
+        mode_frame.pack(fill=tk.X, pady=(0, 10))
+
+        mode_var = tk.StringVar(value=saved_params.get('mode', 'all'))
+        ttk.Radiobutton(mode_frame, text="全部（工作+休眠）", variable=mode_var, value="all").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(mode_frame, text="仅工作模式", variable=mode_var, value="work").pack(side=tk.LEFT, padx=10)
+        ttk.Radiobutton(mode_frame, text="仅休眠模式", variable=mode_var, value="sleep").pack(side=tk.LEFT, padx=10)
+
+        # 调整参数
+        params_frame = ttk.LabelFrame(main_frame, text="调整参数（改一个全部一起改）", padding=10)
+        params_frame.pack(fill=tk.X, pady=(0, 10))
+
+        current_offset_enabled = tk.BooleanVar(value=saved_params.get('current_offset_enabled', False))
+        ttk.Checkbutton(params_frame, text="电流加减固定值:", variable=current_offset_enabled).grid(row=0, column=0, sticky=tk.W, pady=5)
+        current_offset_entry = ttk.Entry(params_frame, width=15)
+        current_offset_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        current_offset_entry.insert(0, saved_params.get('current_offset', '0'))
+        ttk.Label(params_frame, text="（正数为加，负数为减）", foreground='gray').grid(row=0, column=2, sticky=tk.W)
+
+        current_limit_enabled = tk.BooleanVar(value=saved_params.get('current_limit_enabled', False))
+        ttk.Checkbutton(params_frame, text="电流限制最高值:", variable=current_limit_enabled).grid(row=1, column=0, sticky=tk.W, pady=5)
+        current_limit_entry = ttk.Entry(params_frame, width=15)
+        current_limit_entry.grid(row=1, column=1, padx=5, pady=5, sticky=tk.W)
+        current_limit_entry.insert(0, saved_params.get('current_limit', ''))
+        ttk.Label(params_frame, text="（超过此值的数据点截断到此值）", foreground='gray').grid(row=1, column=2, sticky=tk.W)
+
+        voltage_offset_enabled = tk.BooleanVar(value=saved_params.get('voltage_offset_enabled', False))
+        ttk.Checkbutton(params_frame, text="电压加减固定值:", variable=voltage_offset_enabled).grid(row=2, column=0, sticky=tk.W, pady=5)
+        voltage_offset_entry = ttk.Entry(params_frame, width=15)
+        voltage_offset_entry.grid(row=2, column=1, padx=5, pady=5, sticky=tk.W)
+        voltage_offset_entry.insert(0, saved_params.get('voltage_offset', '0'))
+        ttk.Label(params_frame, text="（正数为加，负数为减）", foreground='gray').grid(row=2, column=2, sticky=tk.W)
+
+        voltage_limit_enabled = tk.BooleanVar(value=saved_params.get('voltage_limit_enabled', False))
+        ttk.Checkbutton(params_frame, text="电压限制最高值:", variable=voltage_limit_enabled).grid(row=3, column=0, sticky=tk.W, pady=5)
+        voltage_limit_entry = ttk.Entry(params_frame, width=15)
+        voltage_limit_entry.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
+        voltage_limit_entry.insert(0, saved_params.get('voltage_limit', ''))
+        ttk.Label(params_frame, text="（超过此值的数据点截断到此值）", foreground='gray').grid(row=3, column=2, sticky=tk.W)
+
+        # 记住参数
+        remember_var = tk.BooleanVar(value=saved_params.get('remember', False))
+        ttk.Checkbutton(params_frame, text="记住我的参数设置", variable=remember_var).grid(row=4, column=0, columnspan=3, sticky=tk.W, pady=(10, 0))
+
+        # 输出说明
+        output_frame = ttk.LabelFrame(main_frame, text="输出设置", padding=10)
+        output_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Label(output_frame, text="每个目录自动输出到同级的'html改'文件夹，未修改的模式文件会自动复制，保持1-6完整结构", foreground='gray').pack(anchor=tk.W)
+
+        def execute_adjust():
+            if not all_dirs_data:
+                messagebox.showwarning("警告", "请先添加目录！", parent=adjust_window)
+                return
+
+            mode = mode_var.get()
+            params = {
+                'current_offset_enabled': current_offset_enabled.get(),
+                'current_offset': float(current_offset_entry.get()) if current_offset_enabled.get() else 0,
+                'current_limit_enabled': current_limit_enabled.get(),
+                'current_limit': float(current_limit_entry.get()) if current_limit_enabled.get() and current_limit_entry.get().strip() else None,
+                'voltage_offset_enabled': voltage_offset_enabled.get(),
+                'voltage_offset': float(voltage_offset_entry.get()) if voltage_offset_enabled.get() else 0,
+                'voltage_limit_enabled': voltage_limit_enabled.get(),
+                'voltage_limit': float(voltage_limit_entry.get()) if voltage_limit_enabled.get() and voltage_limit_entry.get().strip() else None,
+            }
+
+            if not any([params['current_offset_enabled'], params['current_limit_enabled'],
+                        params['voltage_offset_enabled'], params['voltage_limit_enabled']]):
+                messagebox.showwarning("警告", "请至少启用一项调整操作！", parent=adjust_window)
+                return
+
+            if params['current_limit_enabled'] and params['current_limit'] is None:
+                messagebox.showerror("错误", "请输入电流最高值！", parent=adjust_window)
+                return
+            if params['voltage_limit_enabled'] and params['voltage_limit'] is None:
+                messagebox.showerror("错误", "请输入电压最高值！", parent=adjust_window)
+                return
+
+            # 统计总文件数
+            total_files = 0
+            for dir_data in all_dirs_data:
+                for item in dir_data['scanned_files']:
+                    if mode in ("all", "work") and item['work']:
+                        total_files += 1
+                    if mode in ("all", "sleep") and item['sleep']:
+                        total_files += 1
+
+            if total_files == 0:
+                messagebox.showwarning("警告", "没有找到符合条件的文件！", parent=adjust_window)
+                return
+
+            output_dirs_str = "\n".join(d['output_dir'] for d in all_dirs_data)
+            if not messagebox.askyesno("确认",
+                                       f"将对 {total_files} 个文件施加调整\n\n输出目录：\n{output_dirs_str}\n\n确定继续吗？",
+                                       parent=adjust_window):
+                return
+
+            # 保存参数（如果勾选了记住）
+            if remember_var.get():
+                params_to_save = {
+                    'mode': mode,
+                    'current_offset_enabled': current_offset_enabled.get(),
+                    'current_offset': current_offset_entry.get(),
+                    'current_limit_enabled': current_limit_enabled.get(),
+                    'current_limit': current_limit_entry.get(),
+                    'voltage_offset_enabled': voltage_offset_enabled.get(),
+                    'voltage_offset': voltage_offset_entry.get(),
+                    'voltage_limit_enabled': voltage_limit_enabled.get(),
+                    'voltage_limit': voltage_limit_entry.get(),
+                    'remember': True,
+                }
+                try:
+                    with open(config_file, 'w', encoding='utf-8') as f:
+                        json.dump(params_to_save, f, ensure_ascii=False, indent=2)
+                except:
+                    pass
+            else:
+                if os.path.exists(config_file):
+                    try:
+                        os.remove(config_file)
+                    except:
+                        pass
+
+            try:
+                total_count = 0
+                for dir_data in all_dirs_data:
+                    count = self._apply_real_data_adjust(
+                        dir_data['root_dir'], dir_data['scanned_files'], mode, params, dir_data['output_dir']
+                    )
+                    total_count += count
+                # 记录选择的目录列表（用于恢复）
+                if not hasattr(self, '_real_data_last_dirs'):
+                    self._real_data_last_dirs = []
+                self._real_data_last_dirs = [d['root_dir'] for d in all_dirs_data]
+                messagebox.showinfo("成功", f"成功处理 {total_count} 个文件！\n\n输出目录：\n{output_dirs_str}",
+                                    parent=adjust_window)
+            except ValueError as e:
+                messagebox.showerror("错误", f"参数错误：{str(e)}", parent=adjust_window)
+            except Exception as e:
+                messagebox.showerror("错误", f"处理失败：{str(e)}", parent=adjust_window)
+
+        def restore_last_selection():
+            """恢复上次选择的目录列表"""
+            if not hasattr(self, '_real_data_last_dirs') or not self._real_data_last_dirs:
+                messagebox.showinfo("提示", "没有上次的选择记录！", parent=adjust_window)
+                return
+            all_dirs_data.clear()
+            failed = []
+            for directory in self._real_data_last_dirs:
+                if not os.path.isdir(directory):
+                    failed.append(directory)
+                    continue
+                results = self._scan_html_directory(directory)
+                if results:
+                    parent = os.path.dirname(directory)
+                    output_dir = os.path.join(parent, "html改")
+                    all_dirs_data.append({
+                        'root_dir': directory,
+                        'scanned_files': results,
+                        'output_dir': output_dir,
+                    })
+            refresh_listbox()
+            if failed:
+                messagebox.showwarning("提示", f"以下目录已不存在：\n" + "\n".join(failed), parent=adjust_window)
+
+        ttk.Button(btn_frame, text="执行调整", command=execute_adjust, width=15).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="恢复上次选择", command=restore_last_selection, width=12).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=adjust_window.destroy, width=10).pack(side=tk.LEFT, padx=5)
+
+    def _apply_real_data_adjust(self, root_dir, scanned_files, mode, params, output_dir):
+        """对所有文件统一施加调整并输出，未修改的模式文件自动复制"""
+        import copy
+        import shutil
+
+        processed_count = 0
+
+        for item in scanned_files:
+            sub_dir = item['dir']
+            out_sub = os.path.join(output_dir, sub_dir)
+            os.makedirs(out_sub, exist_ok=True)
+
+            # 确定哪些文件需要调整，哪些直接复制
+            files_to_adjust = []
+            files_to_copy = []
+
+            if mode in ("all", "work") and item['work']:
+                files_to_adjust.append(item['work'])
+            elif item['work']:
+                files_to_copy.append(item['work'])
+
+            if mode in ("all", "sleep") and item['sleep']:
+                files_to_adjust.append(item['sleep'])
+            elif item['sleep']:
+                files_to_copy.append(item['sleep'])
+
+            # 直接复制未修改的文件
+            for file_path in files_to_copy:
+                dst = os.path.join(out_sub, os.path.basename(file_path))
+                shutil.copy2(file_path, dst)
+
+            # 调整并输出
+            for file_path in files_to_adjust:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    html_content = f.read()
+
+                soup = BeautifulSoup(html_content, 'html.parser')
+                scripts = soup.find_all('script')
+                option_script = None
+
+                for script in scripts:
+                    if script.string and 'const option' in script.string:
+                        option_script = script.string
+                        break
+
+                if not option_script:
+                    # 无法解析的文件直接复制
+                    dst = os.path.join(out_sub, os.path.basename(file_path))
+                    shutil.copy2(file_path, dst)
+                    continue
+
+                pattern = r'const\s+option\s*=\s*(\{[\s\S]*?\});'
+                match = re.search(pattern, option_script)
+                if not match:
+                    dst = os.path.join(out_sub, os.path.basename(file_path))
+                    shutil.copy2(file_path, dst)
+                    continue
+
+                option_data = self.parse_js_object(match.group(1))
+                if 'series' not in option_data:
+                    dst = os.path.join(out_sub, os.path.basename(file_path))
+                    shutil.copy2(file_path, dst)
+                    continue
+
+                series_data = option_data['series']
+
+                # 施加电流调整（电流通常是series[1]）
+                if (params['current_offset_enabled'] or params['current_limit_enabled']) and len(series_data) >= 2:
+                    current_series = series_data[1]
+                    data = current_series.get('data', [])
+
+                    # 如果启用了限制最高值，先计算正常数据的平均值（排除0、null和超阈值的点）
+                    current_avg = None
+                    if params['current_limit_enabled'] and params['current_limit'] is not None:
+                        normal_vals = [d[1] for d in data if isinstance(d, list) and len(d) >= 2
+                                       and d[1] is not None and d[1] != 0 and d[1] <= params['current_limit']]
+                        if normal_vals:
+                            current_avg = sum(normal_vals) / len(normal_vals)
+
+                    for j in range(len(data)):
+                        if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None:
+                            val = data[j][1]
+                            if val == 0:
+                                continue
+                            if params['current_offset_enabled']:
+                                val += params['current_offset']
+                            if params['current_limit_enabled'] and params['current_limit'] is not None:
+                                if val > params['current_limit']:
+                                    val = current_avg if current_avg is not None else params['current_limit']
+                            data[j][1] = val
+
+                # 施加电压调整（电压通常是series[0]）
+                if (params['voltage_offset_enabled'] or params['voltage_limit_enabled']) and len(series_data) >= 1:
+                    voltage_series = series_data[0]
+                    data = voltage_series.get('data', [])
+
+                    # 如果启用了限制最高值，先计算正常数据的平均值
+                    voltage_avg = None
+                    if params['voltage_limit_enabled'] and params['voltage_limit'] is not None:
+                        normal_vals = [d[1] for d in data if isinstance(d, list) and len(d) >= 2
+                                       and d[1] is not None and d[1] != 0 and d[1] <= params['voltage_limit']]
+                        if normal_vals:
+                            voltage_avg = sum(normal_vals) / len(normal_vals)
+
+                    for j in range(len(data)):
+                        if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None:
+                            val = data[j][1]
+                            if val == 0:
+                                continue
+                            if params['voltage_offset_enabled']:
+                                val += params['voltage_offset']
+                            if params['voltage_limit_enabled'] and params['voltage_limit'] is not None:
+                                if val > params['voltage_limit']:
+                                    val = voltage_avg if voltage_avg is not None else params['voltage_limit']
+                            data[j][1] = val
+
+                # 直接替换option JSON，不做零值处理，保持原始数据形态
+                option_data['series'] = series_data
+                new_option_json = json.dumps(option_data, ensure_ascii=False, indent=2)
+                new_script_content = option_script[:match.start(1)] + new_option_json + option_script[match.end(1):]
+
+                for script in soup.find_all('script'):
+                    if script.string and 'const option' in script.string:
+                        script.string = new_script_content
+                        break
+
+                new_html = str(soup)
+
+                out_path = os.path.join(out_sub, os.path.basename(file_path))
+                with open(out_path, 'w', encoding='utf-8') as f:
+                    f.write(new_html)
+
+                processed_count += 1
+
+        return processed_count
 
 
 def main():
