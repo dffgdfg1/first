@@ -986,7 +986,6 @@ def generate_report(
 
         arial_font = Font(name='Arial', size=9)
         alert_fill = PatternFill(fill_type='solid', fgColor='FFC7CE')
-        alert_font = Font(name='Arial', size=9, color='9C0006')
 
         worksheet = writer.sheets['工作模式']
         for row in worksheet.iter_rows():
@@ -999,7 +998,6 @@ def generate_report(
         for row_idx, col_idx in alert_cells:
             cell = worksheet.cell(row=row_idx, column=col_idx)
             cell.fill = alert_fill
-            cell.font = alert_font
 
     output_file = output_dir / "电压电流分析汇总.xlsx"
     try:

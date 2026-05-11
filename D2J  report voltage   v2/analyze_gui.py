@@ -1052,7 +1052,6 @@ class AnalyzeGUI:
         def apply_p03_style(writer):
             arial_font = Font(name='Arial', size=9)
             alert_fill = PatternFill(fill_type='solid', fgColor='FFC7CE')
-            alert_font = Font(name='Arial', size=9, color='9C0006')
 
             worksheet = writer.sheets['工作模式']
             for row in worksheet.iter_rows():
@@ -1065,7 +1064,6 @@ class AnalyzeGUI:
             for row_idx, col_idx in alert_cells:
                 cell = worksheet.cell(row=row_idx, column=col_idx)
                 cell.fill = alert_fill
-                cell.font = alert_font
 
         output_file = output_dir / "P03电压电流分析汇总.xlsx"
         try:
@@ -1097,8 +1095,22 @@ class AnalyzeGUI:
 
 # ── 入口 ──────────────────────────────────────────────────
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--folders', nargs='*', default=[])
+    parser.add_argument('--p03', action='store_true')
+    args, _ = parser.parse_known_args()
+
     root = tk.Tk()
-    AnalyzeGUI(root)
+    gui = AnalyzeGUI(root)
+
+    # 根据命令行参数预填文件夹列表和模式
+    if args.p03:
+        gui.var_mode.set('p03')
+    for folder in args.folders:
+        if folder and folder not in gui.folder_listbox.get(0, tk.END):
+            gui.folder_listbox.insert(tk.END, folder)
+
     root.mainloop()
 
 

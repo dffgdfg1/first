@@ -8,5 +8,10 @@
   "voltage_offset": "0",
   "voltage_limit_enabled": false,
   "voltage_limit": "",
+  "p03_process_rt": true,
+  "p03_process_tmax": false,
+  "p03_process_tmin": true,
+  "normal_auto_analyze": false,
+  "p03_auto_analyze": true,
   "remember": true
 }

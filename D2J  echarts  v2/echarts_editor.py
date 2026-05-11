@@ -6546,9 +6546,18 @@ class EChartsEditor:
             except:
                 pass
 
-        # 多目录上传区域
-        dir_frame = ttk.LabelFrame(main_frame, text="一键上传（支持多个HTML根目录，每个目录自动扫描1-6号样品）", padding=10)
-        dir_frame.pack(fill=tk.X, pady=(0, 10))
+        # Tab 容器：普通模式 / P03模式
+        tab_notebook = ttk.Notebook(main_frame)
+        tab_notebook.pack(fill=tk.X, pady=(0, 10))
+
+        normal_tab = ttk.Frame(tab_notebook, padding=4)
+        p03_tab = ttk.Frame(tab_notebook, padding=4)
+        tab_notebook.add(normal_tab, text="普通模式")
+        tab_notebook.add(p03_tab, text="P03模式")
+
+        # 多目录上传区域（普通模式 tab）
+        dir_frame = ttk.LabelFrame(normal_tab, text="一键上传（支持多个HTML根目录，每个目录自动扫描1-6号样品）", padding=10)
+        dir_frame.pack(fill=tk.X, pady=(0, 0))
 
         # 目录列表和按钮
         dir_btn_row = ttk.Frame(dir_frame)
@@ -6635,6 +6644,128 @@ class EChartsEditor:
             all_dirs_data.clear()
             refresh_listbox()
 
+        # 普通模式：生成后自动分析
+        normal_auto_analyze = tk.BooleanVar(value=saved_params.get('normal_auto_analyze', False))
+        ttk.Checkbutton(
+            normal_tab,
+            text="生成后自动分析（调用电压电流分析工具，以输出目录为输入）",
+            variable=normal_auto_analyze,
+        ).pack(anchor=tk.W, pady=(6, 0))
+
+        # ===== P03 模式 tab =====
+        p03_upload_frame = ttk.LabelFrame(
+            p03_tab,
+            text="依次上传 Rt / Tmax / Tmin 文件夹（每3个一组，总数必须为3的倍数）",
+            padding=10,
+        )
+        p03_upload_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 存储 P03 上传记录：[{'root_dir', 'scanned_files', 'temp'('Rt'|'Tmax'|'Tmin')}, ...]
+        p03_dirs_data = []
+        # 上传阶段循环：Rt → Tmax → Tmin → Rt ...
+        P03_TEMP_SEQ = ('Rt', 'Tmax', 'Tmin')
+
+        p03_status_var = tk.StringVar(value="下一个将作为：Rt")
+
+        p03_btn_row = ttk.Frame(p03_upload_frame)
+        p03_btn_row.pack(fill=tk.X)
+
+        def _next_p03_temp():
+            return P03_TEMP_SEQ[len(p03_dirs_data) % 3]
+
+        def refresh_p03_listbox():
+            p03_listbox.delete(0, tk.END)
+            for idx, d in enumerate(p03_dirs_data):
+                group_no = idx // 3 + 1
+                work_count = sum(1 for it in d['scanned_files'] if it['work'])
+                sleep_count = sum(1 for it in d['scanned_files'] if it['sleep'])
+                p03_listbox.insert(
+                    tk.END,
+                    f"[组{group_no}-{d['temp']}] {d['root_dir']}  (工作{work_count}/休眠{sleep_count})",
+                )
+            total = len(p03_dirs_data)
+            groups = total // 3
+            remainder = total % 3
+            if remainder == 0:
+                p03_status_var.set(f"已上传 {groups} 组（共 {total} 个目录），下一个将作为：Rt")
+            else:
+                p03_status_var.set(
+                    f"已上传 {total} 个目录（{groups} 组完整 + {remainder} 个），下一个将作为：{_next_p03_temp()}"
+                )
+
+        def p03_add_directory():
+            next_temp = _next_p03_temp()
+            directory = filedialog.askdirectory(
+                title=f"选择 {next_temp} 的HTML根目录（包含1-6子目录）",
+                parent=adjust_window,
+            )
+            if not directory:
+                return
+            for d in p03_dirs_data:
+                if os.path.normpath(d['root_dir']) == os.path.normpath(directory):
+                    messagebox.showwarning("提示", "该目录已添加！", parent=adjust_window)
+                    return
+            results = self._scan_html_directory(directory)
+            if not results:
+                messagebox.showwarning("提示", f"该目录下未找到有效的样品文件：\n{directory}", parent=adjust_window)
+                return
+            p03_dirs_data.append({
+                'root_dir': directory,
+                'scanned_files': results,
+                'temp': next_temp,
+            })
+            refresh_p03_listbox()
+
+        def p03_remove_selected():
+            sel = p03_listbox.curselection()
+            if not sel:
+                return
+            # 删除后需要重新为其后的条目分配 temp 标签，保证"序列=上传顺序"
+            idx = sel[0]
+            del p03_dirs_data[idx]
+            for i, d in enumerate(p03_dirs_data):
+                d['temp'] = P03_TEMP_SEQ[i % 3]
+            refresh_p03_listbox()
+
+        def p03_clear_all():
+            p03_dirs_data.clear()
+            refresh_p03_listbox()
+
+        ttk.Button(p03_btn_row, text="上传P03目录", command=p03_add_directory, width=14).pack(side=tk.LEFT, padx=2)
+        ttk.Button(p03_btn_row, text="删除选中", command=p03_remove_selected, width=10).pack(side=tk.LEFT, padx=2)
+        ttk.Button(p03_btn_row, text="清空", command=p03_clear_all, width=8).pack(side=tk.LEFT, padx=2)
+
+        p03_list_row = ttk.Frame(p03_upload_frame)
+        p03_list_row.pack(fill=tk.X, pady=(8, 0))
+        p03_listbox = tk.Listbox(p03_list_row, height=8, width=85)
+        p03_listbox.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        p03_scroll = ttk.Scrollbar(p03_list_row, orient="vertical", command=p03_listbox.yview)
+        p03_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        p03_listbox.configure(yscrollcommand=p03_scroll.set)
+
+        ttk.Label(p03_upload_frame, textvariable=p03_status_var, foreground='blue').pack(anchor=tk.W, pady=(4, 0))
+
+        # 温度勾选（决定实际处理哪些温度，未勾选的整组仍需上传，但只复制不调整）
+        p03_temp_frame = ttk.LabelFrame(p03_tab, text="处理哪些温度（未勾选的温度组会直接复制，保持文件结构完整）", padding=10)
+        p03_temp_frame.pack(fill=tk.X, pady=(0, 0))
+
+        p03_process_rt = tk.BooleanVar(value=saved_params.get('p03_process_rt', True))
+        p03_process_tmax = tk.BooleanVar(value=saved_params.get('p03_process_tmax', False))
+        p03_process_tmin = tk.BooleanVar(value=saved_params.get('p03_process_tmin', True))
+        ttk.Checkbutton(p03_temp_frame, text="处理 Rt", variable=p03_process_rt).pack(side=tk.LEFT, padx=16)
+        ttk.Checkbutton(p03_temp_frame, text="处理 Tmax", variable=p03_process_tmax).pack(side=tk.LEFT, padx=16)
+        ttk.Checkbutton(p03_temp_frame, text="处理 Tmin", variable=p03_process_tmin).pack(side=tk.LEFT, padx=16)
+
+        # P03 模式：生成后自动分析
+        p03_auto_analyze = tk.BooleanVar(value=saved_params.get('p03_auto_analyze', False))
+        ttk.Checkbutton(
+            p03_tab,
+            text="生成后自动分析（以P03模式调用电压电流分析工具，按Rt/Tmax/Tmin分组输入）",
+            variable=p03_auto_analyze,
+        ).pack(anchor=tk.W, pady=(6, 0))
+
+        refresh_p03_listbox()
+
         # 模式选择
         mode_frame = ttk.LabelFrame(main_frame, text="处理模式", padding=10)
         mode_frame.pack(fill=tk.X, pady=(0, 10))
@@ -6686,9 +6817,8 @@ class EChartsEditor:
         ttk.Label(output_frame, text="每个目录自动输出到同级的'html改'文件夹，未修改的模式文件会自动复制，保持1-6完整结构", foreground='gray').pack(anchor=tk.W)
 
         def execute_adjust():
-            if not all_dirs_data:
-                messagebox.showwarning("警告", "请先添加目录！", parent=adjust_window)
-                return
+            # 根据当前选中的 tab 分发
+            is_p03 = tab_notebook.index(tab_notebook.select()) == 1
 
             mode = mode_var.get()
             params = {
@@ -6714,24 +6844,83 @@ class EChartsEditor:
                 messagebox.showerror("错误", "请输入电压最高值！", parent=adjust_window)
                 return
 
-            # 统计总文件数
-            total_files = 0
-            for dir_data in all_dirs_data:
-                for item in dir_data['scanned_files']:
-                    if mode in ("all", "work") and item['work']:
-                        total_files += 1
-                    if mode in ("all", "sleep") and item['sleep']:
-                        total_files += 1
+            if is_p03:
+                # P03 模式校验
+                if not p03_dirs_data:
+                    messagebox.showwarning("警告", "请先上传P03目录！", parent=adjust_window)
+                    return
+                if len(p03_dirs_data) % 3 != 0:
+                    messagebox.showerror(
+                        "错误",
+                        f"P03上传目录数必须为3的倍数（Rt/Tmax/Tmin为一组）\n当前已上传 {len(p03_dirs_data)} 个",
+                        parent=adjust_window,
+                    )
+                    return
+                process_map = {
+                    'Rt': p03_process_rt.get(),
+                    'Tmax': p03_process_tmax.get(),
+                    'Tmin': p03_process_tmin.get(),
+                }
+                if not any(process_map.values()):
+                    messagebox.showwarning("警告", "请至少勾选一个要处理的温度！", parent=adjust_window)
+                    return
 
-            if total_files == 0:
-                messagebox.showwarning("警告", "没有找到符合条件的文件！", parent=adjust_window)
-                return
+                # 统计
+                total_files = 0
+                output_dirs_list = []
+                for d in p03_dirs_data:
+                    parent = os.path.dirname(d['root_dir'])
+                    base_name = os.path.basename(d['root_dir'])
+                    out_dir = os.path.join(parent, f"{base_name}_改")
+                    d['output_dir'] = out_dir
+                    output_dirs_list.append(f"[{d['temp']}] {out_dir}")
+                    if process_map[d['temp']]:
+                        for item in d['scanned_files']:
+                            if mode in ("all", "work") and item['work']:
+                                total_files += 1
+                            if mode in ("all", "sleep") and item['sleep']:
+                                total_files += 1
 
-            output_dirs_str = "\n".join(d['output_dir'] for d in all_dirs_data)
-            if not messagebox.askyesno("确认",
-                                       f"将对 {total_files} 个文件施加调整\n\n输出目录：\n{output_dirs_str}\n\n确定继续吗？",
-                                       parent=adjust_window):
-                return
+                if total_files == 0:
+                    messagebox.showwarning(
+                        "警告",
+                        "勾选的温度下没有找到符合条件的文件（未勾选的温度组会整体复制）！",
+                        parent=adjust_window,
+                    )
+                    return
+
+                skipped_temps = [t for t, v in process_map.items() if not v]
+                skip_info = f"\n未勾选温度（整组复制保持结构）：{', '.join(skipped_temps)}" if skipped_temps else ""
+                output_dirs_str = "\n".join(output_dirs_list)
+                if not messagebox.askyesno(
+                    "确认",
+                    f"P03共 {len(p03_dirs_data) // 3} 组\n将对 {total_files} 个文件施加调整{skip_info}\n\n输出目录：\n{output_dirs_str}\n\n确定继续吗？",
+                    parent=adjust_window,
+                ):
+                    return
+            else:
+                if not all_dirs_data:
+                    messagebox.showwarning("警告", "请先添加目录！", parent=adjust_window)
+                    return
+
+                # 统计总文件数
+                total_files = 0
+                for dir_data in all_dirs_data:
+                    for item in dir_data['scanned_files']:
+                        if mode in ("all", "work") and item['work']:
+                            total_files += 1
+                        if mode in ("all", "sleep") and item['sleep']:
+                            total_files += 1
+
+                if total_files == 0:
+                    messagebox.showwarning("警告", "没有找到符合条件的文件！", parent=adjust_window)
+                    return
+
+                output_dirs_str = "\n".join(d['output_dir'] for d in all_dirs_data)
+                if not messagebox.askyesno("确认",
+                                           f"将对 {total_files} 个文件施加调整\n\n输出目录：\n{output_dirs_str}\n\n确定继续吗？",
+                                           parent=adjust_window):
+                    return
 
             # 保存参数（如果勾选了记住）
             if remember_var.get():
@@ -6745,6 +6934,11 @@ class EChartsEditor:
                     'voltage_offset': voltage_offset_entry.get(),
                     'voltage_limit_enabled': voltage_limit_enabled.get(),
                     'voltage_limit': voltage_limit_entry.get(),
+                    'p03_process_rt': p03_process_rt.get(),
+                    'p03_process_tmax': p03_process_tmax.get(),
+                    'p03_process_tmin': p03_process_tmin.get(),
+                    'normal_auto_analyze': normal_auto_analyze.get(),
+                    'p03_auto_analyze': p03_auto_analyze.get(),
                     'remember': True,
                 }
                 try:
@@ -6761,24 +6955,77 @@ class EChartsEditor:
 
             try:
                 total_count = 0
-                for dir_data in all_dirs_data:
-                    count = self._apply_real_data_adjust(
-                        dir_data['root_dir'], dir_data['scanned_files'], mode, params, dir_data['output_dir']
+                if is_p03:
+                    import shutil
+                    for d in p03_dirs_data:
+                        if process_map[d['temp']]:
+                            count = self._apply_real_data_adjust(
+                                d['root_dir'], d['scanned_files'], mode, params, d['output_dir']
+                            )
+                            total_count += count
+                        else:
+                            # 未勾选温度：整组原样复制到输出目录，保持结构
+                            if os.path.exists(d['output_dir']):
+                                shutil.rmtree(d['output_dir'])
+                            shutil.copytree(d['root_dir'], d['output_dir'])
+                    self._real_data_last_p03_dirs = [d['root_dir'] for d in p03_dirs_data]
+                    messagebox.showinfo(
+                        "成功",
+                        f"P03处理完成！调整文件 {total_count} 个，未勾选温度整组复制。\n\n输出目录：\n{output_dirs_str}",
+                        parent=adjust_window,
                     )
-                    total_count += count
-                # 记录选择的目录列表（用于恢复）
-                if not hasattr(self, '_real_data_last_dirs'):
-                    self._real_data_last_dirs = []
-                self._real_data_last_dirs = [d['root_dir'] for d in all_dirs_data]
-                messagebox.showinfo("成功", f"成功处理 {total_count} 个文件！\n\n输出目录：\n{output_dirs_str}",
-                                    parent=adjust_window)
+                    if p03_auto_analyze.get():
+                        p03_output_dirs = [d['output_dir'] for d in p03_dirs_data]
+                        self._launch_analyzer(p03_output_dirs, p03_mode=True, parent=adjust_window)
+                else:
+                    for dir_data in all_dirs_data:
+                        count = self._apply_real_data_adjust(
+                            dir_data['root_dir'], dir_data['scanned_files'], mode, params, dir_data['output_dir']
+                        )
+                        total_count += count
+                    # 记录选择的目录列表（用于恢复）
+                    if not hasattr(self, '_real_data_last_dirs'):
+                        self._real_data_last_dirs = []
+                    self._real_data_last_dirs = [d['root_dir'] for d in all_dirs_data]
+                    messagebox.showinfo("成功", f"成功处理 {total_count} 个文件！\n\n输出目录：\n{output_dirs_str}",
+                                        parent=adjust_window)
+                    if normal_auto_analyze.get():
+                        normal_output_dirs = [d['output_dir'] for d in all_dirs_data]
+                        self._launch_analyzer(normal_output_dirs, p03_mode=False, parent=adjust_window)
             except ValueError as e:
                 messagebox.showerror("错误", f"参数错误：{str(e)}", parent=adjust_window)
             except Exception as e:
                 messagebox.showerror("错误", f"处理失败：{str(e)}", parent=adjust_window)
 
         def restore_last_selection():
-            """恢复上次选择的目录列表"""
+            """恢复上次选择的目录列表（根据当前 tab）"""
+            is_p03 = tab_notebook.index(tab_notebook.select()) == 1
+            if is_p03:
+                last_dirs = getattr(self, '_real_data_last_p03_dirs', None)
+                if not last_dirs:
+                    messagebox.showinfo("提示", "没有上次的P03选择记录！", parent=adjust_window)
+                    return
+                p03_dirs_data.clear()
+                failed = []
+                for i, directory in enumerate(last_dirs):
+                    if not os.path.isdir(directory):
+                        failed.append(directory)
+                        continue
+                    results = self._scan_html_directory(directory)
+                    if results:
+                        p03_dirs_data.append({
+                            'root_dir': directory,
+                            'scanned_files': results,
+                            'temp': P03_TEMP_SEQ[i % 3],
+                        })
+                # 重新编号（跳过失败项后保持顺序连续）
+                for i, d in enumerate(p03_dirs_data):
+                    d['temp'] = P03_TEMP_SEQ[i % 3]
+                refresh_p03_listbox()
+                if failed:
+                    messagebox.showwarning("提示", f"以下目录已不存在：\n" + "\n".join(failed), parent=adjust_window)
+                return
+
             if not hasattr(self, '_real_data_last_dirs') or not self._real_data_last_dirs:
                 messagebox.showinfo("提示", "没有上次的选择记录！", parent=adjust_window)
                 return
@@ -6940,6 +7187,45 @@ class EChartsEditor:
                 processed_count += 1
 
         return processed_count
+
+    def _launch_analyzer(self, folder_list, p03_mode=False, parent=None):
+        """启动电压电流分析工具 GUI，预填输出目录作为分析输入"""
+        import subprocess
+        import sys
+
+        # 分析器位置：相对于编辑器所在目录 ../D2J  report voltage   v2/analyze_gui.py
+        editor_dir = os.path.dirname(os.path.abspath(__file__))
+        analyzer_gui = os.path.normpath(os.path.join(editor_dir, '..', 'D2J  report voltage   v2', 'analyze_gui.py'))
+        analyzer_exe = os.path.normpath(os.path.join(
+            editor_dir, '..', 'D2J  report voltage   v2', 'dist', '电压电流分析工具.exe'
+        ))
+
+        valid_folders = [f for f in folder_list if os.path.isdir(f)]
+        if not valid_folders:
+            messagebox.showwarning("提示", "没有有效的输出目录可供分析", parent=parent)
+            return
+
+        try:
+            if os.path.exists(analyzer_gui):
+                cmd = [sys.executable, analyzer_gui]
+            elif os.path.exists(analyzer_exe):
+                cmd = [analyzer_exe]
+            else:
+                messagebox.showerror(
+                    "错误",
+                    f"未找到分析工具：\n{analyzer_gui}\n{analyzer_exe}",
+                    parent=parent,
+                )
+                return
+
+            if p03_mode:
+                cmd.append('--p03')
+            cmd.append('--folders')
+            cmd.extend(valid_folders)
+
+            subprocess.Popen(cmd, cwd=os.path.dirname(analyzer_gui) if os.path.exists(analyzer_gui) else None)
+        except Exception as e:
+            messagebox.showerror("错误", f"启动分析工具失败：{str(e)}", parent=parent)
 
 
 def main():
