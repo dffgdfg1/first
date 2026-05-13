@@ -110,6 +110,12 @@ class EChartsEditor:
         self.search_pos_label = ttk.Label(toolbar_row3, text="")
         self.search_pos_label.pack(side=tk.LEFT, padx=4)
 
+        ttk.Label(toolbar_row3, text="替换为:").pack(side=tk.LEFT, padx=(10, 2))
+        self.replace_entry = ttk.Entry(toolbar_row3, width=15)
+        self.replace_entry.pack(side=tk.LEFT, padx=2)
+        self.replace_entry.bind('<Return>', lambda e: self.batch_replace())
+        ttk.Button(toolbar_row3, text="批量替换", command=self.batch_replace).pack(side=tk.LEFT, padx=2)
+
         ttk.Button(toolbar_row3, text="退出", command=self.root.quit).pack(side=tk.RIGHT, padx=5)
 
         # 状态栏
@@ -608,6 +614,55 @@ class EChartsEditor:
             return
         self.search_current_index = (self.search_current_index + 1) % len(self.search_matched_items)
         self._jump_to_search_index()
+
+    def batch_replace(self):
+        """将当前搜索到的所有匹配值统一替换为用户输入的新值"""
+        if not self.tree_widgets:
+            messagebox.showwarning("警告", "请先加载HTML文件！")
+            return
+
+        if not self.search_matched_items:
+            messagebox.showinfo("提示", "请先执行搜索！")
+            return
+
+        replace_text = self.replace_entry.get().strip()
+        if not replace_text:
+            messagebox.showwarning("警告", "请输入要替换成的新数值！")
+            return
+
+        try:
+            new_value = float(replace_text)
+        except ValueError:
+            messagebox.showerror("错误", "请输入有效的数值！")
+            return
+
+        current_tab = self.notebook.index(self.notebook.select())
+        if current_tab >= len(self.tree_widgets):
+            return
+        tree = self.tree_widgets[current_tab]
+        series_idx = current_tab
+
+        total = len(self.search_matched_items)
+        if not messagebox.askyesno("确认替换",
+                                    f"将 {total} 个匹配值统一替换为 {new_value}？\n此操作不可撤销。"):
+            return
+
+        replaced = 0
+        for item in self.search_matched_items:
+            if not tree.exists(item):
+                continue
+            values = list(tree.item(item, 'values'))
+            try:
+                row_idx = int(values[0]) - 1
+            except (ValueError, IndexError):
+                continue
+            self.series_data[series_idx]['data'][row_idx][1] = new_value
+            values[3] = new_value
+            tree.item(item, values=values)
+            replaced += 1
+
+        self.status_var.set(f"已将 {replaced} 个匹配值统一替换为 {new_value}")
+        messagebox.showinfo("完成", f"已成功替换 {replaced} 个值为 {new_value}")
 
 
     def fill_missing_data(self):
@@ -1965,7 +2020,10 @@ class EChartsEditor:
         fluctuation_jump_ratio_entry.grid(row=2, column=3, padx=2)
         fluctuation_jump_ratio_entry.insert(0, "30")
 
-        ttk.Label(fluctuation_params_frame, text="（随机波动：全部数据±5%；跳跃波动：随机30%的数据±5%；固定加减：所有值+0.1，对0和<0.1A不生效）").grid(row=3, column=0, sticky=tk.W, pady=2, columnspan=7)
+        fluctuation_fixed_skip_small_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(fluctuation_params_frame, text="固定加减时，对<0.1A的值不生效", variable=fluctuation_fixed_skip_small_var).grid(row=2, column=4, padx=(10, 0), columnspan=3, sticky=tk.W)
+
+        ttk.Label(fluctuation_params_frame, text="（随机波动：全部数据±5%；跳跃波动：随机30%的数据±5%；固定加减：所有值+0.1，是否对<0.1A生效由上方复选框控制）").grid(row=3, column=0, sticky=tk.W, pady=2, columnspan=7)
 
         # 5.5. 电压随机波动
         voltage_fluctuation_frame = ttk.Frame(options_frame)
@@ -3036,6 +3094,7 @@ class EChartsEditor:
             fluctuation_percent_entry.delete(0, tk.END)
             fluctuation_percent_entry.insert(0, restore_params.get('fluctuation_percent', '5'))
             fluctuation_type_var.set(restore_params.get('fluctuation_type', 'percent'))
+            fluctuation_fixed_skip_small_var.set(restore_params.get('fluctuation_fixed_skip_small', True))
 
             # 恢复电压波动参数
             voltage_fluctuation_start_entry.delete(0, tk.END)
@@ -3154,15 +3213,26 @@ class EChartsEditor:
                     if target_start < 0 or target_end < target_start:
                         messagebox.showerror("错误", "目标序号段无效！", parent=op_window)
                         return
-              # 计算源段和目标段的长度
+                    # 计算源段和目标段的长度
                     source_length = source_end - source_start + 1
                     target_length = target_end - target_start + 1
 
-                    # 对所有文件的所有series进行数据替换
+                    # 对所有文件的指定series进行数据替换
+                    # 按替换类型筛选要处理的series索引（约定：0=电压，1=电流）
+                    if replace_type == "voltage":
+                        target_series_indices = [0]
+                    elif replace_type == "current":
+                        target_series_indices = [1]
+                    else:  # both
+                        target_series_indices = [0, 1]
+
                     replaced_count = 0
                     extended_count = 0
                     for file_info in files_to_process:
-                        for series in file_info['series']:
+                        for s_idx in target_series_indices:
+                            if s_idx >= len(file_info['series']):
+                                continue
+                            series = file_info['series'][s_idx]
                             data = series['data']
 
                             # 检查源序号是否有效
@@ -3191,12 +3261,12 @@ class EChartsEditor:
 
                                 extended_count += 1
 
+                            # 先快照源段数值，避免源段与目标段重叠时读到已覆写的值
+                            source_values = [data[source_start + i][1] for i in range(source_end - source_start + 1)]
+
                             # 复制源数据段的数值到目标数据段（保持目标的时间戳）
-                            for i in range(source_end - source_start + 1):
-                                source_idx = source_start + i
-                                target_idx = target_start + i
-                                # 只替换数值，保持时间戳不变
-                                data[target_idx][1] = data[source_idx][1]
+                            for i, src_val in enumerate(source_values):
+                                data[target_start + i][1] = src_val
 
                             replaced_count += 1
 
@@ -3449,8 +3519,8 @@ class EChartsEditor:
                                         data[i][1] = new_value
                                 else:
                                     # 固定值加减
-                                    # 对小于0.1A的电流值不生效
-                                    if abs(current_value) < 0.1:
+                                    # 可选：对小于0.1A的电流值不生效
+                                    if fluctuation_fixed_skip_small_var.get() and abs(current_value) < 0.1:
                                         continue
 
                                     new_value = current_value + fluctuation_value
@@ -4631,6 +4701,7 @@ class EChartsEditor:
                     'fluctuation_end': fluctuation_end_entry.get() if fluctuation_end_entry.get() else '100',
                     'fluctuation_percent': fluctuation_percent_entry.get() if fluctuation_percent_entry.get() else '5',
                     'fluctuation_type': fluctuation_type_var.get(),
+                    'fluctuation_fixed_skip_small': fluctuation_fixed_skip_small_var.get(),
                     # 电压波动参数
                     'voltage_fluctuation_start': voltage_fluctuation_start_entry.get() if voltage_fluctuation_start_entry.get() else '1',
                     'voltage_fluctuation_end': voltage_fluctuation_end_entry.get() if voltage_fluctuation_end_entry.get() else '100',
@@ -4688,6 +4759,8 @@ class EChartsEditor:
 
                 self.status_var.set(message)
                 messagebox.showinfo("成功", message)
+                # 刷新当前文件的显示（表格 + 引用指向最新数据）
+                self.load_file_by_index(self.current_file_index)
                 # 不关闭窗口，保持当前状态
 
             except ValueError as e:
@@ -5572,9 +5645,18 @@ class EChartsEditor:
 
         # 记住参数复选框
         remember_params_var = tk.BooleanVar(value=saved_params.get("remember", False))
+        # 形状变化增强（分段偏移 + 低频随机游走）
+        shape_variation_var = tk.BooleanVar(value=saved_params.get("shape_variation_enabled", True))
+        ttk.Checkbutton(params_frame, text="曲线形状差异化增强（分段偏移+低频随机游走，让不同文件曲线形状直观不同）",
+                       variable=shape_variation_var).grid(row=16, column=0, columnspan=2, sticky=tk.W, pady=5)
+        ttk.Label(params_frame, text="差异化强度(%):").grid(row=16, column=2, sticky=tk.E, pady=5)
+        shape_variation_amp_entry = ttk.Entry(params_frame, width=8)
+        shape_variation_amp_entry.grid(row=16, column=3, padx=5, pady=5, sticky=tk.W)
+        shape_variation_amp_entry.insert(0, saved_params.get("shape_variation_amp", "3"))
+
         remember_checkbox = ttk.Checkbutton(params_frame, text="记住我的参数设置（下次打开自动加载）",
                                            variable=remember_params_var)
-        remember_checkbox.grid(row=16, column=0, columnspan=5, sticky=tk.W, pady=10)
+        remember_checkbox.grid(row=17, column=0, columnspan=5, sticky=tk.W, pady=10)
 
         def start_batch_generate():
             try:
@@ -5607,6 +5689,10 @@ class EChartsEditor:
 
                 # 获取零值处理选项
                 zero_handling = zero_handling_var.get()
+
+                # 获取形状变化增强选项
+                shape_variation_enabled = shape_variation_var.get()
+                shape_variation_amp = float(shape_variation_amp_entry.get()) if shape_variation_enabled else 0
 
                 # 获取开关机次数统计选项
                 power_cycle_count = power_cycle_count_var.get()
@@ -5675,6 +5761,8 @@ class EChartsEditor:
                         "peak_threshold": peak_threshold_entry.get(),
                         "peak_min_duration": peak_min_duration_entry.get(),
                         "zero_handling": zero_handling,
+                        "shape_variation_enabled": shape_variation_enabled,
+                        "shape_variation_amp": shape_variation_amp_entry.get(),
                         "power_cycle_count": power_cycle_count,
                         "smooth_enabled": smooth_enabled,
                         "smooth_window": smooth_window_entry.get(),
@@ -5703,7 +5791,7 @@ class EChartsEditor:
                     fluctuation_mode, fluctuation_value, output_dir, prefix, sample_rate, jump_ratio,
                     max_limit, peak_clip_enabled, peak_threshold, peak_min_duration, zero_handling,
                     power_cycle_count, smooth_enabled, smooth_window, smooth_custom_range_enabled,
-                    smooth_custom_min, smooth_custom_max
+                    smooth_custom_min, smooth_custom_max, shape_variation_enabled, shape_variation_amp
                 )
 
 
@@ -5711,9 +5799,15 @@ class EChartsEditor:
                 messagebox.showinfo("成功", f"成功生成 {generated_count} 个HTML文件！\n\n保存位置：{output_dir}")
 
             except ValueError as e:
-                messagebox.showerror("错误", f"参数格式错误：{str(e)}", parent=batch_window)
+                import traceback
+                tb = traceback.format_exc()
+                print(tb)
+                messagebox.showerror("错误", f"参数格式错误：{type(e).__name__}: {str(e) or '(无消息)'}\n\n{tb}", parent=batch_window)
             except Exception as e:
-                messagebox.showerror("错误", f"批量生成失败：{str(e)}", parent=batch_window)
+                import traceback
+                tb = traceback.format_exc()
+                print(tb)
+                messagebox.showerror("错误", f"批量生成失败：{type(e).__name__}: {str(e) or '(无消息)'}\n\n{tb}", parent=batch_window)
 
         ttk.Button(btn_frame, text="开始生成", command=start_batch_generate, width=15).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="取消", command=batch_window.destroy, width=15).pack(side=tk.LEFT, padx=5)
@@ -5724,10 +5818,69 @@ class EChartsEditor:
                             prefix, sample_rate, jump_ratio, max_limit, peak_clip_enabled,
                             peak_threshold, peak_min_duration, zero_handling, power_cycle_count,
                             smooth_enabled, smooth_window, smooth_custom_range_enabled,
-                            smooth_custom_min, smooth_custom_max):
+                            smooth_custom_min, smooth_custom_max, shape_variation_enabled=True,
+                            shape_variation_amp=3.0):
         """????????????????"""
         import random
         import copy
+        import math
+
+        def apply_shape_variation(data, r_start, r_end, amp_percent, max_lim):
+            """在现有波动基础上叠加分段偏移+低频随机游走，让曲线形状直观不同"""
+            if amp_percent is None or amp_percent <= 0:
+                return
+            bound = min(r_end + 1, len(data))
+            if bound - r_start < 10:
+                return
+
+            valid_vals = [data[j][1] for j in range(r_start, bound)
+                          if isinstance(data[j], list) and len(data[j]) >= 2
+                          and data[j][1] is not None and data[j][1] != 0]
+            if not valid_vals:
+                return
+            avg_val = sum(valid_vals) / len(valid_vals)
+            if avg_val <= 0:
+                return
+
+            seg_amp = avg_val * (amp_percent / 100) * 0.6
+            wave_amp = avg_val * (amp_percent / 100) * 0.4
+
+            seg_count = random.randint(3, 8)
+            total_len = bound - r_start
+            seg_centers = [r_start + int(total_len * (k + 0.5) / seg_count) for k in range(seg_count)]
+            seg_offsets = [random.uniform(-seg_amp, seg_amp) for _ in range(seg_count)]
+
+            cycles = random.uniform(1.0, 3.0)
+            phase = random.uniform(0, 2 * math.pi)
+
+            def seg_offset_at(idx):
+                if idx <= seg_centers[0]:
+                    return seg_offsets[0]
+                if idx >= seg_centers[-1]:
+                    return seg_offsets[-1]
+                for k in range(len(seg_centers) - 1):
+                    if seg_centers[k] <= idx <= seg_centers[k + 1]:
+                        span = seg_centers[k + 1] - seg_centers[k]
+                        if span == 0:
+                            return seg_offsets[k]
+                        t = (idx - seg_centers[k]) / span
+                        return seg_offsets[k] * (1 - t) + seg_offsets[k + 1] * t
+                return 0
+
+            for j in range(r_start, bound):
+                if not (isinstance(data[j], list) and len(data[j]) >= 2):
+                    continue
+                v = data[j][1]
+                if v is None or v == 0:
+                    continue
+                progress = (j - r_start) / total_len
+                wave = wave_amp * math.sin(2 * math.pi * cycles * progress + phase)
+                new_v = v + seg_offset_at(j) + wave
+                if new_v < 0:
+                    new_v = 0
+                if max_lim is not None and new_v > max_lim:
+                    new_v = max_lim
+                data[j][1] = new_v
 
         # 检测电流单位（从option的yAxis中获取）
         current_unit = "A"  # 默认为A
@@ -5761,6 +5914,12 @@ class EChartsEditor:
                             if isinstance(data[j], list) and len(data[j]) >= 2:
                                 if data[j][1] == 0:
                                     data[j][1] = None
+                    # 作为实际数据时，把null也当作0处理，避免曲线悬浮在空中
+                    elif zero_handling == "as_data":
+                        for j in range(len(data)):
+                            if isinstance(data[j], list) and len(data[j]) >= 2:
+                                if data[j][1] is None:
+                                    data[j][1] = 0
 
                     # 如果是跳跃波动，先确定哪些点需要波动
                     if fluctuation_type == "jump":
@@ -5860,6 +6019,12 @@ class EChartsEditor:
                                         if max_limit is None or new_value <= max_limit:
                                             data[j][1] = new_value
 
+                    # 叠加分段偏移+低频随机游走，让不同文件的曲线形状直观不同
+                    if shape_variation_enabled and fluctuation_type in ("percent", "jump"):
+                        apply_shape_variation(data, range_start,
+                                              min(range_end, len(data) - 1),
+                                              shape_variation_amp, max_limit)
+
             if data_type == "voltage" or data_type == "both":
                 # 对电压数据添加波动
                 if len(new_file_data['series']) >= 1:
@@ -5872,6 +6037,12 @@ class EChartsEditor:
                             if isinstance(data[j], list) and len(data[j]) >= 2:
                                 if data[j][1] == 0:
                                     data[j][1] = None
+                    # 作为实际数据时，把null也当作0处理，避免曲线悬浮在空中
+                    elif zero_handling == "as_data":
+                        for j in range(len(data)):
+                            if isinstance(data[j], list) and len(data[j]) >= 2:
+                                if data[j][1] is None:
+                                    data[j][1] = 0
 
                     # 如果是跳跃波动，先确定哪些点需要波动
                     if fluctuation_type == "jump":
@@ -5970,6 +6141,12 @@ class EChartsEditor:
                                     if new_value >= 0:
                                         if max_limit is None or new_value <= max_limit:
                                             data[j][1] = new_value
+
+                    # 叠加分段偏移+低频随机游走，让不同文件的曲线形状直观不同
+                    if shape_variation_enabled and fluctuation_type in ("percent", "jump"):
+                        apply_shape_variation(data, range_start,
+                                              min(range_end, len(data) - 1),
+                                              shape_variation_amp, max_limit)
 
             # 应用批削峰
             if peak_clip_enabled and peak_threshold is not None:
@@ -6198,84 +6375,53 @@ class EChartsEditor:
                 output_filename = f"{prefix}-{i+1}.html"
             output_path = os.path.join(output_dir, output_filename)
 
-            # 构建新的HTML内容
-            soup = BeautifulSoup(new_file_data['content'], 'html.parser')
-            script_tag = soup.find('script', string=lambda text: text and ('option' in text or 'chart' in text))
+            # 构建新的HTML内容（纯字符串替换，避免BS4序列化大HTML导致MemoryError）
+            import re
+            html_content = new_file_data['content']
 
-            if script_tag:
-                # 更新option数据
-                new_file_data['option']['series'] = new_file_data['series']
-                option_json = json.dumps(new_file_data['option'], ensure_ascii=False, indent=2)
+            # 1. 替换 const/var option = {...}; 这一段
+            new_file_data['option']['series'] = new_file_data['series']
+            option_json = json.dumps(new_file_data['option'], ensure_ascii=False, indent=2)
 
-                # 保留原始script内容，只替换option的JSON部分
-                original_script = script_tag.string
-                if original_script:
-                    # 使用正则表达式找到option = {...}; 的部分并替换
-                    import re
-                    # 匹配 const option = {...}; 或 var option = {...};
-                    pattern = r'(const|var)\s+option\s*=\s*\{[\s\S]*?\};'
+            pattern = r'(const|var)\s+option\s*=\s*\{[\s\S]*?\};'
+            def replace_option(match):
+                keyword = match.group(1)
+                return f'{keyword} option = {option_json};'
+            html_content, _n = re.subn(pattern, replace_option, html_content, count=1)
 
-                    # 使用函数替换，避免反向引用问题
-                    def replace_option(match):
-                        keyword = match.group(1)
-                        return f'{keyword} option = {option_json};'
-
-                    new_script = re.sub(pattern, replace_option, original_script)
-                    script_tag.string = new_script
-
-            # 添加开关机次数显示（如果启用）
+            # 2. 添加/更新开关机次数显示 div（纯字符串处理）
             if power_cycle_count:
-                # 先查找是否已存在开关机次数显示区域
-                existing_div = soup.find('div', id='power-cycle-counter')
+                counter_div = (
+                    f'<div id="power-cycle-counter" style="position: absolute; '
+                    f'top: 80px; right: 1085px; background-color: rgba(255, 255, 255, 0.9); '
+                    f'padding: 10px 15px; border-radius: 5px; '
+                    f'box-shadow: 0 2px 5px rgba(0,0,0,0.2); '
+                    f'font-family: Arial, sans-serif; font-size: 14px; z-index: 1000;">'
+                    f'开关机次数: {power_cycle_count_value}</div>'
+                )
 
-                if existing_div:
-                    # 如果已存在，更新文本内容和样式
-                    existing_div.string = f'开关机次数: {power_cycle_count_value}'
-                    existing_div['style'] = (
-                        'position: absolute; '
-                        'top: 80px; '
-                        'right: 1085px; '
-                        'background-color: rgba(255, 255, 255, 0.9); '
-                        'padding: 10px 15px; '
-                        'border-radius: 5px; '
-                        'box-shadow: 0 2px 5px rgba(0,0,0,0.2); '
-                        'font-family: Arial, sans-serif; '
-                        'font-size: 14px; '
-                        'z-index: 1000;'
-                    )
+                existing_pattern = r'<div\s+id="power-cycle-counter"[\s\S]*?</div>'
+                if re.search(existing_pattern, html_content):
+                    html_content = re.sub(existing_pattern, counter_div, html_content, count=1)
                 else:
-                    # 如果不存在，创建新的div
-                    power_cycle_div = soup.new_tag('div')
-                    power_cycle_div['id'] = 'power-cycle-counter'
-                    power_cycle_div['style'] = (
-                        'position: absolute; '
-                        'top: 80px; '
-                        'right: 1085px; '
-                        'background-color: rgba(255, 255, 255, 0.9); '
-                        'padding: 10px 15px; '
-                        'border-radius: 5px; '
-                        'box-shadow: 0 2px 5px rgba(0,0,0,0.2); '
-                        'font-family: Arial, sans-serif; '
-                        'font-size: 14px; '
-                        'z-index: 1000;'
-                    )
-                    power_cycle_div.string = f'开关机次数: {power_cycle_count_value}'
-
-                    # 尝试找到body标签，如果找不到就找html标签
-                    body_tag = soup.find('body')
-                    if body_tag:
-                        body_tag.insert(0, power_cycle_div)
+                    body_match = re.search(r'<body[^>]*>', html_content, re.IGNORECASE)
+                    if body_match:
+                        insert_pos = body_match.end()
+                        html_content = html_content[:insert_pos] + counter_div + html_content[insert_pos:]
                     else:
-                        html_tag = soup.find('html')
-                        if html_tag:
-                            html_tag.insert(0, power_cycle_div)
+                        html_match = re.search(r'<html[^>]*>', html_content, re.IGNORECASE)
+                        if html_match:
+                            insert_pos = html_match.end()
+                            html_content = html_content[:insert_pos] + counter_div + html_content[insert_pos:]
                         else:
-                            # 如果连html标签都没有，直接添加到soup
-                            soup.insert(0, power_cycle_div)
+                            html_content = counter_div + html_content
 
-            # 保存文件（无论是否找到script标签都保存）
+            # 保存文件
             with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(str(soup))
+                f.write(html_content)
+
+            # 主动释放本轮的大对象，避免循环累积
+            del html_content, new_file_data
 
             generated_count += 1
 

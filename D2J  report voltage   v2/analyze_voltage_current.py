@@ -311,6 +311,28 @@ class VoltageCurrentAnalyzer:
         self.voltage_segments = project_config['voltage_segments']
         self.min_14v_current = project_config.get('min_14v_current', 0.20)
 
+    def _align_data(self):
+        """按时间戳对齐电压和电流数据（二分查找，O(n log m)）"""
+        v_ts_arr = np.array([ts for ts, v in self.voltage_points])
+        v_val_arr = np.array([v for ts, v in self.voltage_points])
+        c_ts_arr = np.array([ts for ts, v in self.current_points])
+        c_val_arr = np.array([v for ts, v in self.current_points])
+
+        sort_idx = np.argsort(v_ts_arr)
+        v_ts_sorted = v_ts_arr[sort_idx]
+        v_val_sorted = v_val_arr[sort_idx]
+
+        insert_pos = np.searchsorted(v_ts_sorted, c_ts_arr)
+        insert_pos = np.clip(insert_pos, 0, len(v_ts_sorted) - 1)
+
+        left_pos = np.clip(insert_pos - 1, 0, len(v_ts_sorted) - 1)
+        dist_right = np.abs(v_ts_sorted[insert_pos] - c_ts_arr)
+        dist_left = np.abs(v_ts_sorted[left_pos] - c_ts_arr)
+        nearest_idx = np.where(dist_left < dist_right, left_pos, insert_pos)
+
+        self._voltages = v_val_sorted[nearest_idx]
+        self._currents = c_val_arr
+
     def analyze(self) -> Dict[float, Tuple[float, float]]:
         """执行分析，返回 {电压段: (最小电流, 最大电流)}"""
         try:
@@ -324,22 +346,7 @@ class VoltageCurrentAnalyzer:
             logger.warning(f"数据为空: {self.html_file}")
             return {}
 
-        # 按时间戳对齐电压和电流数据
-        voltage_dict = {ts: v for ts, v in self.voltage_points}
-        aligned_data = []
-
-        for curr_ts, curr_val in self.current_points:
-            # 查找最接近的电压时间戳
-            if curr_ts in voltage_dict:
-                volt_val = voltage_dict[curr_ts]
-            else:
-                # 找到最近的电压时间戳
-                nearest_ts = min(voltage_dict.keys(), key=lambda ts: abs(ts - curr_ts))
-                volt_val = voltage_dict[nearest_ts]
-            aligned_data.append((volt_val, curr_val))
-
-        self._voltages = np.array([v for v, c in aligned_data])
-        self._currents = np.array([c for v, c in aligned_data])
+        self._align_data()
 
         logger.info(f"对齐后数据点数: {len(self._voltages)}")
 
@@ -362,22 +369,7 @@ class VoltageCurrentAnalyzer:
                 self.voltage_points, self.current_points, self.current_unit = \
                     HTMLDataExtractor.extract(self.html_file)
 
-                # 按时间戳对齐电压和电流数据
-                voltage_dict = {ts: v for ts, v in self.voltage_points}
-                aligned_data = []
-
-                for curr_ts, curr_val in self.current_points:
-                    # 查找最接近的电压时间戳
-                    if curr_ts in voltage_dict:
-                        volt_val = voltage_dict[curr_ts]
-                    else:
-                        # 找到最近的电压时间戳
-                        nearest_ts = min(voltage_dict.keys(), key=lambda ts: abs(ts - curr_ts))
-                        volt_val = voltage_dict[nearest_ts]
-                    aligned_data.append((volt_val, curr_val))
-
-                self._voltages = np.array([v for v, c in aligned_data])
-                self._currents = np.array([c for v, c in aligned_data])
+                self._align_data()
             except Exception:
                 return None
 
@@ -403,22 +395,7 @@ class VoltageCurrentAnalyzer:
                 self.voltage_points, self.current_points, self.current_unit = \
                     HTMLDataExtractor.extract(self.html_file)
 
-                # 按时间戳对齐电压和电流数据
-                voltage_dict = {ts: v for ts, v in self.voltage_points}
-                aligned_data = []
-
-                for curr_ts, curr_val in self.current_points:
-                    # 查找最接近的电压时间戳
-                    if curr_ts in voltage_dict:
-                        volt_val = voltage_dict[curr_ts]
-                    else:
-                        # 找到最近的电压时间戳
-                        nearest_ts = min(voltage_dict.keys(), key=lambda ts: abs(ts - curr_ts))
-                        volt_val = voltage_dict[nearest_ts]
-                    aligned_data.append((volt_val, curr_val))
-
-                self._voltages = np.array([v for v, c in aligned_data])
-                self._currents = np.array([c for v, c in aligned_data])
+                self._align_data()
             except Exception:
                 return None
 
@@ -694,14 +671,70 @@ class VoltageCurrentAnalyzer:
         return groups
 
     def _remove_outliers(self, data: np.ndarray) -> np.ndarray:
-        """使用IQR方法去除异常值"""
+        """基于局部密度的gap检测去除异常值：只移除被明显断层隔开的孤立点"""
         if len(data) < 10:
             return data
-        q1 = np.percentile(data, 25)
-        q3 = np.percentile(data, 75)
-        iqr = q3 - q1
-        lower = q1 - self.outlier_factor * iqr
-        upper = q3 + self.outlier_factor * iqr
+
+        sorted_data = np.sort(data)
+        n = len(sorted_data)
+        gaps = np.diff(sorted_data)
+
+        if len(gaps) == 0:
+            return data
+
+        data_range = sorted_data[-1] - sorted_data[0]
+        if data_range == 0:
+            return data
+
+        # 用数据范围的一定比例作为gap阈值：
+        # 如果某个gap超过整体范围的30%，认为是断层
+        range_threshold = data_range * 0.30
+
+        # 同时用局部密度辅助判断：在gap两侧各取一个窗口，
+        # 如果gap远大于两侧的局部间距中位数，也认为是断层
+        window = max(10, n // 20)
+        big_gap_indices = []
+        for i, g in enumerate(gaps):
+            if g < range_threshold:
+                continue
+            # 计算左侧局部间距
+            left_start = max(0, i - window)
+            left_gaps = gaps[left_start:i] if i > left_start else np.array([g])
+            # 计算右侧局部间距
+            right_end = min(len(gaps), i + 1 + window)
+            right_gaps = gaps[i+1:right_end] if i + 1 < right_end else np.array([g])
+            local_median = np.median(np.concatenate([left_gaps, right_gaps]))
+            if local_median == 0:
+                local_median = g
+            # gap需要远大于局部间距才算断层
+            if g > local_median * 10:
+                big_gap_indices.append(i)
+
+        if not big_gap_indices:
+            return data
+
+        min_cluster_ratio = 0.01
+        min_cluster_size = max(3, int(n * min_cluster_ratio))
+
+        boundaries = [-1] + big_gap_indices + [n - 1]
+        segments = []
+        for i in range(len(boundaries) - 1):
+            start = boundaries[i] + 1
+            end = boundaries[i + 1] + 1
+            segments.append((start, end))
+
+        keep_mask = np.zeros(n, dtype=bool)
+        for start, end in segments:
+            if (end - start) >= min_cluster_size:
+                keep_mask[start:end] = True
+
+        if not np.any(keep_mask):
+            largest_seg = max(segments, key=lambda s: s[1] - s[0])
+            keep_mask[largest_seg[0]:largest_seg[1]] = True
+
+        kept_values = sorted_data[keep_mask]
+        lower = kept_values.min()
+        upper = kept_values.max()
         return data[(data >= lower) & (data <= upper)]
 
 
