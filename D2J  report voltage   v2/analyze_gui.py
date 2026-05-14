@@ -218,6 +218,8 @@ class AnalyzeGUI:
         self.btn_stop.pack(side=tk.LEFT, padx=4)
         self.btn_open_output = ttk.Button(btn_frame, text="打开输出目录", command=self._open_output)
         self.btn_open_output.pack(side=tk.RIGHT, padx=4)
+        self.btn_clear_cache = ttk.Button(btn_frame, text="清解析缓存", command=self._clear_cache)
+        self.btn_clear_cache.pack(side=tk.RIGHT, padx=4)
 
         # === 进度条 ===
         prog_frame = ttk.Frame(self.root)
@@ -341,6 +343,41 @@ class AnalyzeGUI:
             os.startfile(out)
         else:
             messagebox.showwarning("提示", "输出目录不存在")
+
+    def _clear_cache(self):
+        """清理HTML解析的本地缓存（~/.cache/voltage_analyzer）。"""
+        from pathlib import Path
+        import shutil
+        cache_dir = Path.home() / '.cache' / 'voltage_analyzer'
+
+        if not cache_dir.exists():
+            messagebox.showinfo("提示", "缓存目录不存在，无需清理")
+            return
+
+        try:
+            files = list(cache_dir.glob('*.npz'))
+            count = len(files)
+            total_size = sum(f.stat().st_size for f in files) / 1024 / 1024
+        except Exception:
+            count, total_size = 0, 0
+
+        if count == 0:
+            messagebox.showinfo("提示", "缓存目录为空")
+            return
+
+        if not messagebox.askyesno(
+            "确认清理",
+            f"将删除 {count} 个缓存文件（约 {total_size:.1f} MB）。\n\n"
+            f"位置：{cache_dir}\n\n确定继续吗？"
+        ):
+            return
+
+        try:
+            shutil.rmtree(cache_dir)
+            messagebox.showinfo("完成", f"已清除 {count} 个缓存文件（{total_size:.1f} MB）")
+            self._log(f"解析缓存已清空：{count} 个文件 / {total_size:.1f} MB")
+        except Exception as e:
+            messagebox.showerror("错误", f"清理失败：{e}")
 
     # ── 文件夹列表管理 ──────────────────────────────────────
     def _add_folders(self):
@@ -967,7 +1004,7 @@ class AnalyzeGUI:
     def _generate_p03_report(self, all_temp_results: dict, output_dir: Path):
         """生成P03合并Excel报告，将Rt/Tmax/Tmin数据整合到一个表"""
         import pandas as pd
-        from openpyxl.styles import Font, PatternFill
+        from openpyxl.styles import Font, PatternFill, Alignment
 
         project_type = self.var_project.get()
         voltage_segments = PROJECT_CONFIGS[project_type]['voltage_segments']
@@ -1052,11 +1089,13 @@ class AnalyzeGUI:
         def apply_p03_style(writer):
             arial_font = Font(name='Arial', size=9)
             alert_fill = PatternFill(fill_type='solid', fgColor='FFC7CE')
+            center_align = Alignment(horizontal='center', vertical='center')
 
             worksheet = writer.sheets['工作模式']
             for row in worksheet.iter_rows():
                 for cell in row:
                     cell.font = arial_font
+                    cell.alignment = center_align
             for column_cells in worksheet.columns:
                 max_length = max(len(str(cell.value)) if cell.value is not None else 0 for cell in column_cells)
                 worksheet.column_dimensions[column_cells[0].column_letter].width = min(max(max_length + 2, 10), 24)
