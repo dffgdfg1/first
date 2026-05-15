@@ -6673,14 +6673,35 @@ class EChartsEditor:
         """真实数据调整 - 基于真实HTML数据统一施加调整"""
         adjust_window = tk.Toplevel(self.root)
         adjust_window.title("真实数据调整")
-        adjust_window.geometry("850x750")
-        adjust_window.minsize(800, 720)
+        adjust_window.geometry("1050x800")
+        adjust_window.minsize(1000, 720)
 
         btn_frame = ttk.Frame(adjust_window)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
 
-        main_frame = ttk.Frame(adjust_window, padding=10)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # 可滚动主区域
+        outer_frame = ttk.Frame(adjust_window)
+        outer_frame.pack(fill=tk.BOTH, expand=True)
+        _canvas = tk.Canvas(outer_frame, highlightthickness=0)
+        _vscroll = ttk.Scrollbar(outer_frame, orient="vertical", command=_canvas.yview)
+        _canvas.configure(yscrollcommand=_vscroll.set)
+        _canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        _vscroll.pack(side=tk.RIGHT, fill=tk.Y)
+        main_frame = ttk.Frame(_canvas, padding=10)
+        _main_window_id = _canvas.create_window((0, 0), window=main_frame, anchor="nw")
+
+        def _on_main_configure(event):
+            _canvas.configure(scrollregion=_canvas.bbox("all"))
+        main_frame.bind("<Configure>", _on_main_configure)
+
+        def _on_canvas_configure(event):
+            _canvas.itemconfig(_main_window_id, width=event.width)
+        _canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(event):
+            _canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        _canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        adjust_window.bind("<Destroy>", lambda e: _canvas.unbind_all("<MouseWheel>") if e.widget is adjust_window else None)
 
         # 加载保存的参数
         config_file = os.path.join(os.path.dirname(__file__), 'real_data_adjust_config.json')
@@ -6957,6 +6978,145 @@ class EChartsEditor:
         remember_var = tk.BooleanVar(value=saved_params.get('remember', False))
         ttk.Checkbutton(params_frame, text="记住我的参数设置", variable=remember_var).grid(row=4, column=0, columnspan=3, sticky=tk.W, pady=(10, 0))
 
+        # ==================== 高级处理参数（同步自批生成） ====================
+        adv_frame = ttk.LabelFrame(main_frame, text="高级处理参数（同步自批生成；仅启用项才会执行）", padding=10)
+        adv_frame.pack(fill=tk.X, pady=(0, 10))
+
+        # 处理范围（适用于波动/削峰/形状差异化等）
+        ttk.Label(adv_frame, text="处理范围:").grid(row=0, column=0, sticky=tk.W, pady=5)
+        adv_range_start_entry = ttk.Entry(adv_frame, width=10)
+        adv_range_start_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        adv_range_start_entry.insert(0, saved_params.get("adv_range_start", "1"))
+        ttk.Label(adv_frame, text="到").grid(row=0, column=2, padx=2)
+        adv_range_end_entry = ttk.Entry(adv_frame, width=10)
+        adv_range_end_entry.grid(row=0, column=3, padx=5, pady=5, sticky=tk.W)
+        adv_range_end_entry.insert(0, saved_params.get("adv_range_end", ""))
+        ttk.Label(adv_frame, text="（结束留空=到末尾；以1为起点）", foreground='gray').grid(row=0, column=4, columnspan=3, sticky=tk.W)
+
+        # ---- 随机/跳跃/固定波动 ----
+        adv_fluctuation_enabled = tk.BooleanVar(value=saved_params.get("adv_fluctuation_enabled", False))
+        ttk.Checkbutton(adv_frame, text="启用波动叠加", variable=adv_fluctuation_enabled).grid(row=1, column=0, sticky=tk.W, pady=5)
+
+        ttk.Label(adv_frame, text="波动对象:").grid(row=1, column=1, sticky=tk.E, pady=5)
+        adv_data_type_var = tk.StringVar(value=saved_params.get("adv_data_type", "current"))
+        adv_dt_frame = ttk.Frame(adv_frame)
+        adv_dt_frame.grid(row=1, column=2, columnspan=5, sticky=tk.W)
+        ttk.Radiobutton(adv_dt_frame, text="电流", variable=adv_data_type_var, value="current").pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(adv_dt_frame, text="电压", variable=adv_data_type_var, value="voltage").pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(adv_dt_frame, text="电压和电流", variable=adv_data_type_var, value="both").pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(adv_frame, text="波动类型:").grid(row=2, column=0, sticky=tk.W, pady=5)
+        adv_fluctuation_type_var = tk.StringVar(value=saved_params.get("adv_fluctuation_type", "jump"))
+        adv_ft_frame = ttk.Frame(adv_frame)
+        adv_ft_frame.grid(row=2, column=1, columnspan=6, sticky=tk.W)
+        ttk.Radiobutton(adv_ft_frame, text="随机波动(±%)", variable=adv_fluctuation_type_var, value="percent").pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(adv_ft_frame, text="跳跃波动(±%)", variable=adv_fluctuation_type_var, value="jump").pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(adv_ft_frame, text="固定加减", variable=adv_fluctuation_type_var, value="fixed").pack(side=tk.LEFT, padx=2)
+
+        ttk.Label(adv_frame, text="跳跃比例(%):").grid(row=3, column=0, sticky=tk.W, pady=5)
+        adv_jump_ratio_entry = ttk.Entry(adv_frame, width=10)
+        adv_jump_ratio_entry.grid(row=3, column=1, padx=5, pady=5, sticky=tk.W)
+        adv_jump_ratio_entry.insert(0, saved_params.get("adv_jump_ratio", "20"))
+        ttk.Label(adv_frame, text="（仅跳跃波动有效；随机选择多少%数据点波动）", foreground='gray').grid(row=3, column=2, columnspan=5, sticky=tk.W)
+
+        ttk.Label(adv_frame, text="波动模式:").grid(row=4, column=0, sticky=tk.W, pady=5)
+        adv_fluctuation_mode_var = tk.StringVar(value=saved_params.get("adv_fluctuation_mode", "independent"))
+        adv_fm_frame = ttk.Frame(adv_frame)
+        adv_fm_frame.grid(row=4, column=1, columnspan=6, sticky=tk.W)
+        ttk.Radiobutton(adv_fm_frame, text="整体偏移", variable=adv_fluctuation_mode_var, value="overall").pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(adv_fm_frame, text="每点独立", variable=adv_fluctuation_mode_var, value="independent").pack(side=tk.LEFT, padx=2)
+        ttk.Label(adv_fm_frame, text="（整体偏移保持平滑，每点独立会产生毛刺）", foreground='gray').pack(side=tk.LEFT, padx=4)
+
+        ttk.Label(adv_frame, text="波动幅度:").grid(row=5, column=0, sticky=tk.W, pady=5)
+        adv_fluctuation_value_entry = ttk.Entry(adv_frame, width=10)
+        adv_fluctuation_value_entry.grid(row=5, column=1, padx=5, pady=5, sticky=tk.W)
+        adv_fluctuation_value_entry.insert(0, saved_params.get("adv_fluctuation_value", "30"))
+        ttk.Label(adv_frame, text="（百分比：5表示±5%；固定加减：0.1表示+0.1）", foreground='gray').grid(row=5, column=2, columnspan=5, sticky=tk.W)
+
+        ttk.Label(adv_frame, text="波动上限:").grid(row=6, column=0, sticky=tk.W, pady=5)
+        adv_max_limit_entry = ttk.Entry(adv_frame, width=10)
+        adv_max_limit_entry.grid(row=6, column=1, padx=5, pady=5, sticky=tk.W)
+        adv_max_limit_entry.insert(0, saved_params.get("adv_max_limit", ""))
+        ttk.Label(adv_frame, text="（可选；波动后超过此值则不波动，留空=不限）", foreground='gray').grid(row=6, column=2, columnspan=5, sticky=tk.W)
+
+        # ---- 形状差异化增强 ----
+        adv_shape_variation_var = tk.BooleanVar(value=saved_params.get("adv_shape_variation_enabled", False))
+        ttk.Checkbutton(adv_frame, text="曲线形状差异化增强（分段偏移+低频随机游走，让多个文件曲线形状直观不同）",
+                        variable=adv_shape_variation_var).grid(row=7, column=0, columnspan=4, sticky=tk.W, pady=5)
+        ttk.Label(adv_frame, text="差异化强度(%):").grid(row=7, column=4, sticky=tk.E, pady=5)
+        adv_shape_variation_amp_entry = ttk.Entry(adv_frame, width=8)
+        adv_shape_variation_amp_entry.grid(row=7, column=5, padx=5, pady=5, sticky=tk.W)
+        adv_shape_variation_amp_entry.insert(0, saved_params.get("adv_shape_variation_amp", "3"))
+
+        # ---- 批削峰 ----
+        adv_peak_clip_enabled_var = tk.BooleanVar(value=saved_params.get("adv_peak_clip_enabled", False))
+        ttk.Checkbutton(adv_frame, text="批削峰（替换超过峰值的数据为平均值）:",
+                        variable=adv_peak_clip_enabled_var).grid(row=8, column=0, sticky=tk.W, pady=5, columnspan=2)
+        ttk.Label(adv_frame, text="峰值阈值:").grid(row=8, column=2, sticky=tk.E, pady=5)
+        adv_peak_threshold_entry = ttk.Entry(adv_frame, width=10)
+        adv_peak_threshold_entry.grid(row=8, column=3, padx=5, pady=5, sticky=tk.W)
+        adv_peak_threshold_entry.insert(0, saved_params.get("adv_peak_threshold", ""))
+        ttk.Label(adv_frame, text="最短持续点数:").grid(row=8, column=4, sticky=tk.E, pady=5)
+        adv_peak_min_duration_entry = ttk.Entry(adv_frame, width=8)
+        adv_peak_min_duration_entry.grid(row=8, column=5, padx=5, pady=5, sticky=tk.W)
+        adv_peak_min_duration_entry.insert(0, saved_params.get("adv_peak_min_duration", ""))
+        ttk.Label(adv_frame, text="（空=全削；填N则连续超阈值点数<N才削）",
+                  foreground='gray').grid(row=8, column=6, sticky=tk.W, pady=5)
+
+        # ---- 0值处理 ----
+        ttk.Label(adv_frame, text="0值处理:").grid(row=9, column=0, sticky=tk.W, pady=5)
+        adv_zero_handling_var = tk.StringVar(value=saved_params.get("adv_zero_handling", "default"))
+        adv_zh_frame = ttk.Frame(adv_frame)
+        adv_zh_frame.grid(row=9, column=1, columnspan=6, sticky=tk.W)
+        ttk.Radiobutton(adv_zh_frame, text="默认（跳过0值）", variable=adv_zero_handling_var, value="default").pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(adv_zh_frame, text="替换为null", variable=adv_zero_handling_var, value="to_null").pack(side=tk.LEFT, padx=2)
+        ttk.Radiobutton(adv_zh_frame, text="作为实际数据", variable=adv_zero_handling_var, value="as_data").pack(side=tk.LEFT, padx=2)
+
+        # ---- 平滑输出 ----
+        adv_smooth_enabled_var = tk.BooleanVar(value=saved_params.get("adv_smooth_enabled", False))
+        ttk.Checkbutton(adv_frame, text="平滑输出（移动平均）:",
+                        variable=adv_smooth_enabled_var).grid(row=10, column=0, sticky=tk.W, pady=5)
+        ttk.Label(adv_frame, text="窗口大小:").grid(row=10, column=1, sticky=tk.E, pady=5)
+        adv_smooth_window_entry = ttk.Entry(adv_frame, width=8)
+        adv_smooth_window_entry.grid(row=10, column=2, padx=5, pady=5, sticky=tk.W)
+        adv_smooth_window_entry.insert(0, saved_params.get("adv_smooth_window", "5"))
+        ttk.Label(adv_frame, text="（每N点取平均，建议3-10）", foreground='gray').grid(row=10, column=3, columnspan=4, sticky=tk.W)
+
+        # ---- 自定义异常值范围 ----
+        adv_smooth_custom_range_var = tk.BooleanVar(value=saved_params.get("adv_smooth_custom_range_enabled", False))
+
+        def _toggle_adv_custom_range():
+            state = tk.NORMAL if adv_smooth_custom_range_var.get() else tk.DISABLED
+            adv_smooth_custom_min_entry.config(state=state)
+            adv_smooth_custom_max_entry.config(state=state)
+
+        ttk.Checkbutton(adv_frame, text="自定义异常值范围（范围外的值不参与平滑且被保留）:",
+                        variable=adv_smooth_custom_range_var, command=_toggle_adv_custom_range).grid(row=11, column=0, columnspan=2, sticky=tk.W, pady=5)
+        ttk.Label(adv_frame, text="最小值:").grid(row=11, column=2, sticky=tk.E, pady=5)
+        adv_smooth_custom_min_entry = ttk.Entry(adv_frame, width=10)
+        adv_smooth_custom_min_entry.grid(row=11, column=3, padx=5, pady=5, sticky=tk.W)
+        adv_smooth_custom_min_entry.insert(0, saved_params.get("adv_smooth_custom_min", ""))
+        ttk.Label(adv_frame, text="最大值:").grid(row=11, column=4, sticky=tk.E, pady=5)
+        adv_smooth_custom_max_entry = ttk.Entry(adv_frame, width=10)
+        adv_smooth_custom_max_entry.grid(row=11, column=5, padx=5, pady=5, sticky=tk.W)
+        adv_smooth_custom_max_entry.insert(0, saved_params.get("adv_smooth_custom_max", ""))
+        if not adv_smooth_custom_range_var.get():
+            adv_smooth_custom_min_entry.config(state=tk.DISABLED)
+            adv_smooth_custom_max_entry.config(state=tk.DISABLED)
+
+        # ---- 输出采样率 ----
+        ttk.Label(adv_frame, text="输出采样率:").grid(row=12, column=0, sticky=tk.W, pady=5)
+        adv_sample_rate_entry = ttk.Entry(adv_frame, width=10)
+        adv_sample_rate_entry.grid(row=12, column=1, padx=5, pady=5, sticky=tk.W)
+        adv_sample_rate_entry.insert(0, saved_params.get("adv_sample_rate", "1"))
+        ttk.Label(adv_frame, text="（1=全部输出，2=每2个取1个，N=每N个取1个）",
+                  foreground='gray').grid(row=12, column=2, columnspan=5, sticky=tk.W)
+
+        # ---- 开关机次数统计 ----
+        adv_power_cycle_count_var = tk.BooleanVar(value=saved_params.get("adv_power_cycle_count", False))
+        ttk.Checkbutton(adv_frame, text="生成开关机次数统计（显示在HTML右上角，检测电流变化）",
+                        variable=adv_power_cycle_count_var).grid(row=13, column=0, columnspan=6, sticky=tk.W, pady=5)
+
         # 输出说明
         output_frame = ttk.LabelFrame(main_frame, text="输出设置", padding=10)
         output_frame.pack(fill=tk.X, pady=(0, 10))
@@ -6978,8 +7138,93 @@ class EChartsEditor:
                 'voltage_limit': float(voltage_limit_entry.get()) if voltage_limit_enabled.get() and voltage_limit_entry.get().strip() else None,
             }
 
+            # ---- 收集高级处理参数 ----
+            try:
+                adv_range_start_raw = adv_range_start_entry.get().strip()
+                adv_range_start = max(1, int(adv_range_start_raw)) if adv_range_start_raw else 1
+                adv_range_end_raw = adv_range_end_entry.get().strip()
+                adv_range_end = int(adv_range_end_raw) if adv_range_end_raw else None
+                if adv_range_end is not None and adv_range_end < adv_range_start:
+                    messagebox.showerror("错误", "处理范围结束值不能小于起始值！", parent=adjust_window)
+                    return
+            except ValueError:
+                messagebox.showerror("错误", "处理范围必须是整数！", parent=adjust_window)
+                return
+
+            adv_fluctuation_on = adv_fluctuation_enabled.get()
+            adv_shape_on = adv_shape_variation_var.get()
+            adv_peak_on = adv_peak_clip_enabled_var.get()
+            adv_smooth_on = adv_smooth_enabled_var.get()
+            adv_smooth_custom_on = adv_smooth_custom_range_var.get() and adv_smooth_on
+
+            try:
+                adv_fluctuation_value = float(adv_fluctuation_value_entry.get()) if adv_fluctuation_on else 0.0
+                adv_jump_ratio = float(adv_jump_ratio_entry.get()) if adv_fluctuation_on else 0.0
+                adv_max_limit_raw = adv_max_limit_entry.get().strip()
+                adv_max_limit = float(adv_max_limit_raw) if adv_fluctuation_on and adv_max_limit_raw else None
+                adv_shape_amp = float(adv_shape_variation_amp_entry.get()) if adv_shape_on else 0.0
+                adv_peak_threshold_raw = adv_peak_threshold_entry.get().strip()
+                adv_peak_threshold = float(adv_peak_threshold_raw) if adv_peak_on and adv_peak_threshold_raw else None
+                adv_peak_min_duration_raw = adv_peak_min_duration_entry.get().strip()
+                adv_peak_min_duration = int(adv_peak_min_duration_raw) if adv_peak_on and adv_peak_min_duration_raw else None
+                adv_smooth_window = int(adv_smooth_window_entry.get()) if adv_smooth_on else 1
+                adv_smooth_custom_min_raw = adv_smooth_custom_min_entry.get().strip()
+                adv_smooth_custom_max_raw = adv_smooth_custom_max_entry.get().strip()
+                adv_smooth_custom_min = float(adv_smooth_custom_min_raw) if adv_smooth_custom_on and adv_smooth_custom_min_raw else None
+                adv_smooth_custom_max = float(adv_smooth_custom_max_raw) if adv_smooth_custom_on and adv_smooth_custom_max_raw else None
+                adv_sample_rate = max(1, int(adv_sample_rate_entry.get()))
+            except ValueError as ve:
+                messagebox.showerror("错误", f"高级参数格式错误：{ve}", parent=adjust_window)
+                return
+
+            if adv_peak_on and adv_peak_threshold is None:
+                messagebox.showerror("错误", "启用批削峰时必须填写峰值阈值！", parent=adjust_window)
+                return
+            if adv_peak_min_duration is not None and adv_peak_min_duration < 1:
+                messagebox.showerror("错误", "最短持续点数必须大于等于1！", parent=adjust_window)
+                return
+            if adv_smooth_on and adv_smooth_window < 2:
+                messagebox.showerror("错误", "平滑窗口大小必须大于等于2！", parent=adjust_window)
+                return
+            if adv_smooth_custom_on:
+                if adv_smooth_custom_min is None or adv_smooth_custom_max is None:
+                    messagebox.showerror("错误", "启用自定义异常值范围时，最小值和最大值均不能为空！", parent=adjust_window)
+                    return
+                if adv_smooth_custom_min >= adv_smooth_custom_max:
+                    messagebox.showerror("错误", "自定义异常值范围：最小值必须小于最大值！", parent=adjust_window)
+                    return
+
+            params.update({
+                'adv_range_start': adv_range_start - 1,
+                'adv_range_end': (adv_range_end - 1) if adv_range_end is not None else None,
+                'adv_fluctuation_enabled': adv_fluctuation_on,
+                'adv_data_type': adv_data_type_var.get(),
+                'adv_fluctuation_type': adv_fluctuation_type_var.get(),
+                'adv_fluctuation_mode': adv_fluctuation_mode_var.get(),
+                'adv_fluctuation_value': adv_fluctuation_value,
+                'adv_jump_ratio': adv_jump_ratio,
+                'adv_max_limit': adv_max_limit,
+                'adv_shape_variation_enabled': adv_shape_on,
+                'adv_shape_variation_amp': adv_shape_amp,
+                'adv_peak_clip_enabled': adv_peak_on,
+                'adv_peak_threshold': adv_peak_threshold,
+                'adv_peak_min_duration': adv_peak_min_duration,
+                'adv_zero_handling': adv_zero_handling_var.get(),
+                'adv_smooth_enabled': adv_smooth_on,
+                'adv_smooth_window': adv_smooth_window,
+                'adv_smooth_custom_range_enabled': adv_smooth_custom_on,
+                'adv_smooth_custom_min': adv_smooth_custom_min,
+                'adv_smooth_custom_max': adv_smooth_custom_max,
+                'adv_sample_rate': adv_sample_rate,
+                'adv_power_cycle_count': adv_power_cycle_count_var.get(),
+            })
+
+            adv_any_on = (adv_fluctuation_on or adv_shape_on or adv_peak_on or adv_smooth_on
+                          or adv_power_cycle_count_var.get() or adv_sample_rate > 1
+                          or adv_zero_handling_var.get() != "default")
+
             if not any([params['current_offset_enabled'], params['current_limit_enabled'],
-                        params['voltage_offset_enabled'], params['voltage_limit_enabled']]):
+                        params['voltage_offset_enabled'], params['voltage_limit_enabled']]) and not adv_any_on:
                 messagebox.showwarning("警告", "请至少启用一项调整操作！", parent=adjust_window)
                 return
 
@@ -7085,6 +7330,28 @@ class EChartsEditor:
                     'p03_process_tmin': p03_process_tmin.get(),
                     'normal_auto_analyze': normal_auto_analyze.get(),
                     'p03_auto_analyze': p03_auto_analyze.get(),
+                    'adv_range_start': adv_range_start_entry.get(),
+                    'adv_range_end': adv_range_end_entry.get(),
+                    'adv_fluctuation_enabled': adv_fluctuation_enabled.get(),
+                    'adv_data_type': adv_data_type_var.get(),
+                    'adv_fluctuation_type': adv_fluctuation_type_var.get(),
+                    'adv_fluctuation_mode': adv_fluctuation_mode_var.get(),
+                    'adv_fluctuation_value': adv_fluctuation_value_entry.get(),
+                    'adv_jump_ratio': adv_jump_ratio_entry.get(),
+                    'adv_max_limit': adv_max_limit_entry.get(),
+                    'adv_shape_variation_enabled': adv_shape_variation_var.get(),
+                    'adv_shape_variation_amp': adv_shape_variation_amp_entry.get(),
+                    'adv_peak_clip_enabled': adv_peak_clip_enabled_var.get(),
+                    'adv_peak_threshold': adv_peak_threshold_entry.get(),
+                    'adv_peak_min_duration': adv_peak_min_duration_entry.get(),
+                    'adv_zero_handling': adv_zero_handling_var.get(),
+                    'adv_smooth_enabled': adv_smooth_enabled_var.get(),
+                    'adv_smooth_window': adv_smooth_window_entry.get(),
+                    'adv_smooth_custom_range_enabled': adv_smooth_custom_range_var.get(),
+                    'adv_smooth_custom_min': adv_smooth_custom_min_entry.get(),
+                    'adv_smooth_custom_max': adv_smooth_custom_max_entry.get(),
+                    'adv_sample_rate': adv_sample_rate_entry.get(),
+                    'adv_power_cycle_count': adv_power_cycle_count_var.get(),
                     'remember': True,
                 }
                 try:
@@ -7314,6 +7581,350 @@ class EChartsEditor:
                                     val = voltage_avg if voltage_avg is not None else params['voltage_limit']
                             data[j][1] = val
 
+                # ============== 高级处理（同步自批生成） ==============
+                import random as _rnd
+                import math as _math
+
+                adv_range_start = params.get('adv_range_start', 0) or 0
+                adv_range_end_param = params.get('adv_range_end', None)
+                adv_data_type = params.get('adv_data_type', 'current')
+                adv_zero_handling = params.get('adv_zero_handling', 'default')
+                adv_max_limit = params.get('adv_max_limit', None)
+
+                def _series_data(idx):
+                    if idx < len(series_data):
+                        return series_data[idx].get('data', [])
+                    return []
+
+                def _resolve_range(data):
+                    rs = max(0, min(adv_range_start, max(0, len(data) - 1)))
+                    if adv_range_end_param is None:
+                        re_ = max(0, len(data) - 1)
+                    else:
+                        re_ = max(rs, min(adv_range_end_param, max(0, len(data) - 1)))
+                    return rs, re_
+
+                def _apply_zero_handling(data):
+                    if adv_zero_handling == 'to_null':
+                        for j in range(len(data)):
+                            if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] == 0:
+                                data[j][1] = None
+                    elif adv_zero_handling == 'as_data':
+                        for j in range(len(data)):
+                            if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is None:
+                                data[j][1] = 0
+
+                def _apply_fluctuation(data):
+                    if not params.get('adv_fluctuation_enabled'):
+                        return
+                    rs, re_ = _resolve_range(data)
+                    bound = min(re_ + 1, len(data))
+                    ftype = params.get('adv_fluctuation_type', 'jump')
+                    fmode = params.get('adv_fluctuation_mode', 'independent')
+                    fval = params.get('adv_fluctuation_value', 0.0)
+                    jump_ratio = params.get('adv_jump_ratio', 0.0)
+
+                    jump_indices = None
+                    if ftype == 'jump':
+                        total_pts = bound - rs
+                        jcount = int(total_pts * jump_ratio / 100)
+                        all_idx = list(range(rs, bound))
+                        jump_indices = set(_rnd.sample(all_idx, jcount)) if jcount > 0 else set()
+
+                    def _val_at(j):
+                        return data[j][1] if isinstance(data[j], list) and len(data[j]) >= 2 else None
+
+                    if fmode == 'overall':
+                        if ftype in ('percent', 'jump'):
+                            if adv_zero_handling == 'as_data':
+                                vv = [_val_at(j) for j in range(rs, bound) if _val_at(j) is not None]
+                            else:
+                                vv = [_val_at(j) for j in range(rs, bound) if _val_at(j) is not None and _val_at(j) != 0]
+                            if vv:
+                                avg = sum(vv) / len(vv)
+                                rng = avg * (fval / 100)
+                                offset = _rnd.uniform(-rng, rng)
+                            else:
+                                offset = 0
+                        else:
+                            offset = fval
+
+                        for j in range(rs, bound):
+                            if ftype == 'jump' and j not in jump_indices:
+                                continue
+                            if not (isinstance(data[j], list) and len(data[j]) >= 2):
+                                continue
+                            cv = data[j][1]
+                            if cv is None:
+                                continue
+                            if cv == 0:
+                                if adv_zero_handling == 'default':
+                                    continue
+                                if adv_zero_handling == 'to_null':
+                                    data[j][1] = None
+                                    continue
+                            new_v = cv + offset
+                            if new_v >= 0 and (adv_max_limit is None or new_v <= adv_max_limit):
+                                data[j][1] = new_v
+                    else:
+                        for j in range(rs, bound):
+                            if ftype == 'jump' and j not in jump_indices:
+                                continue
+                            if not (isinstance(data[j], list) and len(data[j]) >= 2):
+                                continue
+                            cv = data[j][1]
+                            if cv is None:
+                                continue
+                            if cv == 0:
+                                if adv_zero_handling == 'default':
+                                    continue
+                                if adv_zero_handling == 'to_null':
+                                    data[j][1] = None
+                                    continue
+                            if ftype in ('percent', 'jump'):
+                                rng = cv * (fval / 100)
+                                new_v = cv + _rnd.uniform(-rng, rng)
+                            else:
+                                new_v = cv + fval
+                            if new_v >= 0 and (adv_max_limit is None or new_v <= adv_max_limit):
+                                data[j][1] = new_v
+
+                def _apply_shape_variation(data):
+                    if not params.get('adv_shape_variation_enabled'):
+                        return
+                    if params.get('adv_fluctuation_type') not in ('percent', 'jump') or not params.get('adv_fluctuation_enabled'):
+                        return
+                    amp_percent = params.get('adv_shape_variation_amp', 0.0)
+                    if amp_percent <= 0:
+                        return
+                    rs, re_ = _resolve_range(data)
+                    bound = min(re_ + 1, len(data))
+                    if bound - rs < 10:
+                        return
+                    valid_vals = [data[j][1] for j in range(rs, bound)
+                                  if isinstance(data[j], list) and len(data[j]) >= 2
+                                  and data[j][1] is not None and data[j][1] != 0]
+                    if not valid_vals:
+                        return
+                    avg_val = sum(valid_vals) / len(valid_vals)
+                    if avg_val <= 0:
+                        return
+                    seg_amp = avg_val * (amp_percent / 100) * 0.6
+                    wave_amp = avg_val * (amp_percent / 100) * 0.4
+                    seg_count = _rnd.randint(3, 8)
+                    total_len = bound - rs
+                    seg_centers = [rs + int(total_len * (k + 0.5) / seg_count) for k in range(seg_count)]
+                    seg_offsets = [_rnd.uniform(-seg_amp, seg_amp) for _ in range(seg_count)]
+                    cycles = _rnd.uniform(1.0, 3.0)
+                    phase = _rnd.uniform(0, 2 * _math.pi)
+
+                    def seg_offset_at(idx):
+                        if idx <= seg_centers[0]:
+                            return seg_offsets[0]
+                        if idx >= seg_centers[-1]:
+                            return seg_offsets[-1]
+                        for k in range(len(seg_centers) - 1):
+                            if seg_centers[k] <= idx <= seg_centers[k + 1]:
+                                span = seg_centers[k + 1] - seg_centers[k]
+                                if span == 0:
+                                    return seg_offsets[k]
+                                t = (idx - seg_centers[k]) / span
+                                return seg_offsets[k] * (1 - t) + seg_offsets[k + 1] * t
+                        return 0
+
+                    for j in range(rs, bound):
+                        if not (isinstance(data[j], list) and len(data[j]) >= 2):
+                            continue
+                        v = data[j][1]
+                        if v is None or v == 0:
+                            continue
+                        progress = (j - rs) / total_len
+                        wave = wave_amp * _math.sin(2 * _math.pi * cycles * progress + phase)
+                        new_v = v + seg_offset_at(j) + wave
+                        if new_v < 0:
+                            new_v = 0
+                        if adv_max_limit is not None and new_v > adv_max_limit:
+                            new_v = adv_max_limit
+                        data[j][1] = new_v
+
+                def _apply_peak_clip(data):
+                    if not params.get('adv_peak_clip_enabled'):
+                        return
+                    threshold = params.get('adv_peak_threshold')
+                    if threshold is None:
+                        return
+                    min_dur = params.get('adv_peak_min_duration')
+                    rs, re_ = _resolve_range(data)
+                    bound = min(re_ + 1, len(data))
+                    valid_vals = [data[j][1] for j in range(rs, bound)
+                                  if isinstance(data[j], list) and len(data[j]) >= 2 and data[j][1] is not None]
+                    if not valid_vals:
+                        return
+                    avg_value = sum(valid_vals) / len(valid_vals)
+                    i = rs
+                    while i < bound:
+                        if isinstance(data[i], list) and len(data[i]) >= 2 and data[i][1] is not None and data[i][1] > threshold:
+                            run_start = i
+                            while i < bound and isinstance(data[i], list) and len(data[i]) >= 2 and data[i][1] is not None and data[i][1] > threshold:
+                                i += 1
+                            run_length = i - run_start
+                            if min_dur is None or run_length < min_dur:
+                                for k in range(run_start, i):
+                                    data[k][1] = avg_value
+                        else:
+                            i += 1
+
+                def _apply_smooth_voltage(data):
+                    if not params.get('adv_smooth_enabled'):
+                        return data
+                    window = params.get('adv_smooth_window', 5)
+                    if window < 2:
+                        return data
+                    custom_on = params.get('adv_smooth_custom_range_enabled', False)
+                    cmin = params.get('adv_smooth_custom_min')
+                    cmax = params.get('adv_smooth_custom_max')
+                    smoothed = []
+                    for j in range(len(data)):
+                        if isinstance(data[j], list) and len(data[j]) >= 2:
+                            ts = data[j][0]
+                            v = data[j][1]
+                            if v is None:
+                                smoothed.append([ts, None])
+                                continue
+                            if custom_on and not (cmin <= v <= cmax):
+                                smoothed.append([ts, v])
+                                continue
+                            half = window // 2
+                            si = max(0, j - half)
+                            ei = min(len(data), j + half + 1)
+                            wv = []
+                            for k in range(si, ei):
+                                if isinstance(data[k], list) and len(data[k]) >= 2 and data[k][1] is not None:
+                                    if custom_on and not (cmin <= data[k][1] <= cmax):
+                                        continue
+                                    wv.append(data[k][1])
+                            if wv:
+                                smoothed.append([ts, sum(wv) / len(wv)])
+                            else:
+                                smoothed.append([ts, v])
+                        else:
+                            smoothed.append(data[j])
+                    return smoothed
+
+                def _apply_smooth_current(current_data, voltage_data):
+                    if not params.get('adv_smooth_enabled'):
+                        return current_data
+                    window = params.get('adv_smooth_window', 5)
+                    if window < 2:
+                        return current_data
+                    custom_on = params.get('adv_smooth_custom_range_enabled', False)
+                    cmin = params.get('adv_smooth_custom_min')
+                    cmax = params.get('adv_smooth_custom_max')
+                    smoothed = []
+                    voltage_threshold = 0.5
+                    for j in range(len(current_data)):
+                        if not (isinstance(current_data[j], list) and len(current_data[j]) >= 2):
+                            smoothed.append(current_data[j])
+                            continue
+                        ts = current_data[j][0]
+                        v = current_data[j][1]
+                        if v is None:
+                            smoothed.append([ts, None])
+                            continue
+                        if custom_on and not (cmin <= v <= cmax):
+                            smoothed.append([ts, v])
+                            continue
+                        cur_volt = None
+                        if j < len(voltage_data) and isinstance(voltage_data[j], list) and len(voltage_data[j]) >= 2:
+                            cur_volt = voltage_data[j][1]
+                        if cur_volt is None:
+                            smoothed.append([ts, v])
+                            continue
+                        half = window // 2
+                        si = max(0, j - half)
+                        ei = min(len(current_data), j + half + 1)
+                        wv = []
+                        for k in range(si, ei):
+                            if isinstance(current_data[k], list) and len(current_data[k]) >= 2 and current_data[k][1] is not None:
+                                if custom_on and not (cmin <= current_data[k][1] <= cmax):
+                                    continue
+                                if k < len(voltage_data) and isinstance(voltage_data[k], list) and len(voltage_data[k]) >= 2:
+                                    wvolt = voltage_data[k][1]
+                                    if wvolt is not None and abs(wvolt - cur_volt) < voltage_threshold:
+                                        wv.append(current_data[k][1])
+                        should_smooth = False
+                        if len(wv) >= 2:
+                            mx = max(wv); mn = min(wv); av = sum(wv)/len(wv)
+                            if av > 0 and (mx - mn) / av < 0.5:
+                                should_smooth = True
+                        if should_smooth:
+                            smoothed.append([ts, sum(wv)/len(wv)])
+                        else:
+                            smoothed.append([ts, v])
+                    return smoothed
+
+                # 应用零值处理 + 波动 + 形状差异化（按数据类型选择）
+                touch_current = adv_data_type in ('current', 'both') and len(series_data) >= 2
+                touch_voltage = adv_data_type in ('voltage', 'both') and len(series_data) >= 1
+
+                if touch_current:
+                    cdata = series_data[1].get('data', [])
+                    _apply_zero_handling(cdata)
+                    _apply_fluctuation(cdata)
+                    _apply_shape_variation(cdata)
+                if touch_voltage:
+                    vdata = series_data[0].get('data', [])
+                    _apply_zero_handling(vdata)
+                    _apply_fluctuation(vdata)
+                    _apply_shape_variation(vdata)
+
+                # 批削峰
+                if params.get('adv_peak_clip_enabled'):
+                    if touch_current or adv_data_type == 'current':
+                        if len(series_data) >= 2:
+                            _apply_peak_clip(series_data[1].get('data', []))
+                    if touch_voltage or adv_data_type == 'voltage':
+                        if len(series_data) >= 1:
+                            _apply_peak_clip(series_data[0].get('data', []))
+
+                # 平滑（电流需要参考电压）
+                if params.get('adv_smooth_enabled'):
+                    if (adv_data_type in ('current', 'both')) and len(series_data) >= 2:
+                        vdata_for_smooth = series_data[0].get('data', []) if len(series_data) >= 1 else []
+                        cdata = series_data[1].get('data', [])
+                        series_data[1]['data'] = _apply_smooth_current(cdata, vdata_for_smooth)
+                    if (adv_data_type in ('voltage', 'both')) and len(series_data) >= 1:
+                        vdata = series_data[0].get('data', [])
+                        series_data[0]['data'] = _apply_smooth_voltage(vdata)
+
+                # 输出采样率
+                adv_sample_rate = params.get('adv_sample_rate', 1)
+                if adv_sample_rate > 1:
+                    for s in series_data:
+                        if 'data' in s:
+                            s['data'] = [s['data'][k] for k in range(0, len(s['data']), adv_sample_rate)]
+
+                # 开关机次数统计（用于HTML注入）
+                power_cycle_count_value = 0
+                power_cycle_count_on = params.get('adv_power_cycle_count', False)
+                if power_cycle_count_on and len(series_data) >= 2:
+                    cdata = series_data[1].get('data', [])
+                    valid_currents = [p[1] for p in cdata
+                                      if isinstance(p, list) and len(p) >= 2
+                                      and p[1] is not None and p[1] > 0]
+                    if valid_currents:
+                        threshold = sum(valid_currents) / len(valid_currents) * 0.1
+                        previous_state = None
+                        state_change_count = 0
+                        for p in cdata:
+                            if isinstance(p, list) and len(p) >= 2:
+                                cv = p[1]
+                                cur_state = False if (cv is None or cv <= threshold) else True
+                                if previous_state is not None and previous_state != cur_state:
+                                    state_change_count += 1
+                                previous_state = cur_state
+                        power_cycle_count_value = state_change_count // 2
+
                 # 直接替换option JSON，不做零值处理，保持原始数据形态
                 option_data['series'] = series_data
                 new_option_json = json.dumps(option_data, ensure_ascii=False, indent=2)
@@ -7325,6 +7936,27 @@ class EChartsEditor:
                         break
 
                 new_html = str(soup)
+
+                # 注入开关机次数显示 div
+                if power_cycle_count_on:
+                    counter_div = (
+                        f'<div id="power-cycle-counter" style="position: absolute; '
+                        f'top: 80px; right: 1085px; background-color: rgba(255, 255, 255, 0.9); '
+                        f'padding: 10px 15px; border-radius: 5px; '
+                        f'box-shadow: 0 2px 5px rgba(0,0,0,0.2); '
+                        f'font-family: Arial, sans-serif; font-size: 14px; z-index: 1000;">'
+                        f'开关机次数: {power_cycle_count_value}</div>'
+                    )
+                    existing_pattern = r'<div\s+id="power-cycle-counter"[\s\S]*?</div>'
+                    if re.search(existing_pattern, new_html):
+                        new_html = re.sub(existing_pattern, counter_div, new_html, count=1)
+                    else:
+                        body_match = re.search(r'<body[^>]*>', new_html, re.IGNORECASE)
+                        if body_match:
+                            insert_pos = body_match.end()
+                            new_html = new_html[:insert_pos] + counter_div + new_html[insert_pos:]
+                        else:
+                            new_html = counter_div + new_html
 
                 out_path = os.path.join(out_sub, os.path.basename(file_path))
                 with open(out_path, 'w', encoding='utf-8') as f:
